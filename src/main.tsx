@@ -130,6 +130,7 @@ interface ActiveRun {
   id: number;
   drop: Drop;
   misses: number;
+  techniqueMatched: boolean;
 }
 
 function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, focusSignal, multiline, vimEnabled }: VimInputProps) {
@@ -221,6 +222,7 @@ function App() {
   useEffect(() => localStorage.setItem(EDITOR_KEY, editorStyle), [editorStyle]);
 
   const technique = techniqueFor(drop);
+  const techniqueMismatch = Boolean(answer.trim() && technique.enforced && technique.pattern && !technique.pattern.test(answer));
   const reference = referenceFor(drop);
   const canonicalBody = drop.mode === 'code' ? (SOLUTIONS[drop.id] ?? '# Solution unavailable') : `return ${drop.answer ?? ''}`;
   const canonicalCode = `def solve(${drop.signature}):\n${canonicalBody.split('\n').map((line) => `    ${line}`).join('\n')}`;
@@ -255,7 +257,7 @@ function App() {
     if (data.type === 'result' && data.result.passed === runDrop.tests.length) {
       const bonus = Math.round(timeRef.current * 10);
       const completed = new Set(solvedRef.current).add(runDrop.id);
-      const updatedReviews = { ...reviewsRef.current, [runDrop.id]: nextReview(reviewsRef.current[runDrop.id], context.misses) };
+      const updatedReviews = { ...reviewsRef.current, [runDrop.id]: nextReview(reviewsRef.current[runDrop.id], context.misses + (context.techniqueMatched ? 0 : 1)) };
       solvedRef.current = completed;
       reviewsRef.current = updatedReviews;
       setScore((value) => value + runDrop.xp + bonus);
@@ -264,7 +266,7 @@ function App() {
       setSolved(completed);
       setReviews(updatedReviews);
       setDiagnostic({ kind: 'success', title: 'All hidden tests passed', message: runDrop.insight });
-      setFeedback({ type: 'clear', title: 'BLOCK CLEARED', detail: `${runDrop.insight} · +${runDrop.xp + bonus}` });
+      setFeedback({ type: 'clear', title: 'BLOCK CLEARED', detail: context.techniqueMatched ? `${runDrop.insight} · +${runDrop.xp + bonus}` : `Passed · focus-move review scheduled sooner · +${runDrop.xp + bonus}` });
       transitionTimerRef.current = setTimeout(() => advance(runDrop.id, updatedReviews), 1250);
       return;
     }
@@ -320,17 +322,12 @@ function App() {
 
   const run = () => {
     if (!answer.trim() || running || feedback?.type === 'clear') return;
-    if (technique.enforced && technique.pattern && !technique.pattern.test(answer)) {
-      setMisses((value) => value + 1);
-      setDiagnostic({ title: 'Technique mismatch', message: technique.cue });
-      return;
-    }
     if (!runtimeReady) { setFeedback({ type: 'error', title: 'WARMING UP', detail: 'Python will be ready in a moment' }); setTimeout(() => setFeedback(null), 1100); return; }
     setStarted(true); setRunning(true); setFeedback(null); setDiagnostic(null);
     const body = drop.mode === 'code' ? answer.split('\n').map((line) => `    ${line}`).join('\n') : `    return ${answer}`;
     const code = `def solve(${drop.signature}):\n${body}`;
     const runId = Date.now();
-    activeRunRef.current = { id: runId, drop, misses: missesRef.current };
+    activeRunRef.current = { id: runId, drop, misses: missesRef.current, techniqueMatched: !techniqueMismatch };
     workerRef.current?.postMessage({ type: 'run', id: runId, code, tests: drop.tests });
     timeoutRef.current = setTimeout(() => { activeRunRef.current = null; workerRef.current?.terminate(); setRunning(false); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work.' }); createWorker(); }, 4000);
   };
@@ -380,6 +377,7 @@ function App() {
         <div className={`code-dock ${drop.mode === 'code' ? 'multiline' : ''} ${diagnostic && diagnostic.kind !== 'success' ? 'has-error' : ''}`}>
           <div className="signature"><div className="signature-code"><span>def</span> solve({drop.signature}):</div><div className="editor-toggle" aria-label="Editor mode"><button aria-pressed={editorStyle === 'standard'} className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button aria-pressed={editorStyle === 'vim'} className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
           <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}-${solutionOpen}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
+          {techniqueMismatch && <div className="technique-warning" role="status"><Brain /><span><strong>Different approach</strong>Your code can still pass. This drill is targeting: {technique.cue}</span></div>}
           {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code><b>INPUT</b>{diagnostic.input}</code><code><b>EXPECTED</b>{diagnostic.expected}</code><code><b>RECEIVED</b>{diagnostic.received}</code></div>}</div>{diagnostic.kind !== 'success' && misses > 0 && <button className="diagnostic-solution" onClick={() => setSolutionOpen(true)}>View solution <ChevronRight /></button>}</div>}
           <div className="dock-foot"><button className="skip" disabled={running || feedback?.type === 'clear'} onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
         </div>
