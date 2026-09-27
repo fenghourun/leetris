@@ -1,4 +1,6 @@
-const EXACT_RULES = {
+import type { Drop } from './types';
+
+const EXACT_RULES: Record<string, [RegExp, string]> = {
   floor: [/\bmin\s*\(/, 'Use min(nums). This rep is specifically for recalling min().'],
   largest: [/\bmax\s*\(/, 'Use max(nums). This rep is specifically for recalling max().'],
   total: [/\bsum\s*\(/, 'Use sum(nums), rather than writing an accumulator loop.'],
@@ -20,7 +22,7 @@ const EXACT_RULES = {
   'running-sum': [/accumulate\s*\(/, 'Use itertools.accumulate() for this fluency rep.'],
 };
 
-const PATTERN_CUES = [
+const PATTERN_CUES: Array<[string, string]> = [
   ['Two Pointers', 'Maintain two indices and move them using the ordering invariant.'],
   ['Hash Maps', 'Use hashed state so each lookup or count is constant-time on average.'],
   ['Stacks', 'Use a stack to preserve the most recent unresolved item.'],
@@ -35,14 +37,14 @@ const PATTERN_CUES = [
   ['Trees', 'Write the base case first, then solve the same task on each child.'],
 ];
 
-export function techniqueFor(drop) {
+export function techniqueFor(drop: Drop): { enforced: boolean; pattern?: RegExp; cue: string } {
   const exact = EXACT_RULES[drop.id];
   if (exact) return { enforced: true, pattern: exact[0], cue: exact[1] };
   const trackCue = PATTERN_CUES.find(([track]) => track === drop.track)?.[1];
   return { enforced: false, cue: trackCue || `Practice ${drop.concept} as the primary move.` };
 }
 
-const REFERENCES = {
+const REFERENCES: Record<string, [string, string, string]> = {
   floor: ['min(iterable)', 'Returns the smallest item.', 'min([8, 3, 5])  # 3'],
   largest: ['max(iterable)', 'Returns the largest item.', 'max([4, 9, 2])  # 9'],
   total: ['sum(iterable, start=0)', 'Adds items from left to right.', 'sum([4, 2, 7])  # 13'],
@@ -64,7 +66,7 @@ const REFERENCES = {
   'running-sum': ['itertools.accumulate(iterable)', 'Yields each intermediate cumulative result.', 'list(accumulate(nums))'],
 };
 
-const TRACK_REFERENCES = {
+const TRACK_REFERENCES: Record<string, [string, string, string]> = {
   'Hash Maps': ['seen[key] = value', 'Store information by key so later membership and lookup are fast.', 'if needed in seen: ...'],
   'Two Pointers': ['left, right = 0, len(items) - 1', 'Move indices according to the invariant instead of checking every pair.', 'while left < right: ...'],
   'Stacks': ['stack.append(x) / stack.pop()', 'The top represents the most recent unresolved item.', 'while stack and can_resolve: ...'],
@@ -79,7 +81,7 @@ const TRACK_REFERENCES = {
   'Trees': ['base case → left → right', 'Solve the same smaller problem on each child.', 'return combine(solve(left), solve(right))'],
 };
 
-export function referenceFor(drop) {
+export function referenceFor(drop: Drop): { signature: string; note: string; example: string } {
   const [signature, note, example] = REFERENCES[drop.id] || TRACK_REFERENCES[drop.track] || [drop.concept, drop.insight, ''];
   return { signature, note, example };
 }

@@ -1,3 +1,5 @@
+import type { Drop } from './types';
+
 // Original drills built around common programming patterns. Problem wording is intentionally
 // compact so each round begins with retrieval rather than a long reading phase.
 export const CURRICULUM = [
@@ -288,7 +290,7 @@ export const CURRICULUM = [
     signature: 'tree', hint: 'Pass an allowed lower and upper bound into each subtree.', insight: 'ancestor constraints matter, not only parent comparisons',
     tests: [{ args: [[2,[1,null,null],[3,null,null]]], expected: true, label: 'valid' }, { args: [[5,[1,null,null],[4,[3,null,null],[6,null,null]]]], expected: false, label: 'deep violation' }, { args: [null], expected: true, label: 'empty tree' }],
   },
-];
+] satisfies Drop[];
 
 export const TRACKS = [
   { name: 'Python Foundations', goal: 'Fluent expressions and core tools' },
@@ -304,4 +306,4 @@ export const TRACKS = [
   { name: 'Heaps', goal: 'Maintain priority and top-k state' },
   { name: 'Backtracking', goal: 'Explore and restore decision state' },
   { name: 'Trees', goal: 'Apply recursive structure and invariants' },
-];
+] as const;

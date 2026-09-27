@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CURRICULUM, TRACKS } from '../src/curriculum.js';
-import { BRIDGE_DRILLS } from '../src/bridgeDrills.js';
-import { SOLUTIONS } from '../src/solutions.js';
-import { techniqueFor, referenceFor } from '../src/pedagogy.js';
+import { CURRICULUM, TRACKS } from '../src/curriculum.ts';
+import { BRIDGE_DRILLS } from '../src/bridgeDrills.ts';
+import { SOLUTIONS } from '../src/solutions.ts';
+import { techniqueFor, referenceFor } from '../src/pedagogy.ts';
 
 const drills = [...CURRICULUM, ...BRIDGE_DRILLS];
 
@@ -28,6 +28,6 @@ test('every drill has an actionable technique and reference', () => {
 test('canonical expression answers satisfy enforced technique rules', () => {
   for (const drop of drills.filter((item) => item.mode !== 'code')) {
     const technique = techniqueFor(drop);
-    if (technique.enforced) assert.match(drop.answer, technique.pattern, `${drop.id}: canonical answer violates its technique`);
+    if (technique.enforced && technique.pattern) assert.match(drop.answer!, technique.pattern, `${drop.id}: canonical answer violates its technique`);
   }
 });

@@ -1,4 +1,4 @@
-export const SOLUTIONS = {
+export const SOLUTIONS: Record<string, string> = {
   'two-sum': `seen = {}
 for i, value in enumerate(nums):
     need = target - value

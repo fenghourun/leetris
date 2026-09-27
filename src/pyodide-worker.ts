@@ -1,17 +1,36 @@
-let pyodide;
-let ready;
+/// <reference lib="webworker" />
 
-async function boot() {
-  importScripts('https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js');
+import type { TestCase } from './types';
+
+interface PyodideRuntime {
+  globals: { set: (name: string, value: unknown) => void };
+  runPythonAsync: (code: string) => Promise<unknown>;
+}
+
+interface RunRequest {
+  type: 'run';
+  id: number;
+  code: string;
+  tests: TestCase[];
+}
+
+declare function loadPyodide(): Promise<PyodideRuntime>;
+
+const workerScope = self as unknown as DedicatedWorkerGlobalScope;
+let pyodide: PyodideRuntime | undefined;
+let ready: Promise<void>;
+
+async function boot(): Promise<void> {
+  workerScope.importScripts('https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js');
   pyodide = await loadPyodide();
-  self.postMessage({ type: 'ready' });
+  workerScope.postMessage({ type: 'ready' });
 }
 
 ready = boot().catch((error) => {
-  self.postMessage({ type: 'boot-error', error: String(error) });
+  workerScope.postMessage({ type: 'boot-error', error: String(error) });
 });
 
-self.onmessage = async ({ data }) => {
+workerScope.onmessage = async ({ data }: MessageEvent<RunRequest>) => {
   if (data.type !== 'run') return;
   await ready;
   if (!pyodide) return;
@@ -62,14 +81,14 @@ except Exception:
 result["stdout"] = captured.getvalue()
 json.dumps(result)
     `);
-    const result = JSON.parse(raw);
-    self.postMessage({
+    const result: unknown = JSON.parse(String(raw));
+    workerScope.postMessage({
       type: 'result',
       id: data.id,
       result,
       totalMs: Math.round(performance.now() - started)
     });
   } catch (error) {
-    self.postMessage({ type: 'error', id: data.id, error: String(error) });
+    workerScope.postMessage({ type: 'error', id: data.id, error: String(error) });
   }
 };

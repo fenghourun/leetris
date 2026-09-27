@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseNextIndex, chooseStartingIndex, nextReview } from '../src/scheduler.js';
+import { chooseNextIndex, chooseStartingIndex, nextReview } from '../src/scheduler.ts';
 
 const drops = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
 
