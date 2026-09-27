@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BookOpen, Brain, Check, ChevronRight, Flame, HelpCircle, Keyboard, Pause, Play, SkipForward, Sparkles, Volume2, VolumeX, X, Zap } from 'lucide-react';
+import { BookOpen, Brain, Check, ChevronDown, ChevronRight, Command, CornerDownLeft, Flame, HelpCircle, Keyboard, Pause, Play, SkipForward, Sparkles, Volume2, VolumeX, X, Zap } from 'lucide-react';
 import { CURRICULUM, TRACKS } from './curriculum';
 import { BRIDGE_DRILLS } from './bridgeDrills';
 import { SOLUTIONS } from './solutions';
-import { techniqueFor } from './pedagogy';
+import { referenceFor, techniqueFor } from './pedagogy';
 import './styles.css';
 
 const STARTER_DROPS = [
@@ -207,6 +207,7 @@ function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
   const [solutionOpen, setSolutionOpen] = useState(false);
+  const [referenceOpen, setReferenceOpen] = useState(true);
   const [muted, setMuted] = useState(false);
   const workerRef = useRef(null);
   const timeoutRef = useRef(null);
@@ -219,6 +220,7 @@ function App() {
   useEffect(() => localStorage.setItem(EDITOR_KEY, editorStyle), [editorStyle]);
 
   const technique = techniqueFor(drop);
+  const reference = referenceFor(drop);
   const canonicalBody = drop.mode === 'code' ? SOLUTIONS[drop.id] : `return ${drop.answer}`;
   const canonicalCode = `def solve(${drop.signature}):\n${canonicalBody.split('\n').map((line) => `    ${line}`).join('\n')}`;
 
@@ -236,7 +238,7 @@ function App() {
 
   const createWorker = useCallback(() => {
     workerRef.current?.terminate(); setRuntimeReady(false);
-    const worker = new Worker('/pyodide-worker.js');
+    const worker = new Worker(`${import.meta.env.BASE_URL}pyodide-worker.js`);
     workerRef.current = worker;
     worker.onmessage = ({ data }) => {
       if (data.type === 'ready') setRuntimeReady(true);
@@ -316,7 +318,6 @@ function App() {
       <div className="hud-score"><small>SCORE</small><strong>{score.toLocaleString().padStart(6, '0')}</strong></div>
       <div className="hud-actions">
         <span className={`runtime ${runtimeReady ? 'ready' : ''}`}><i />{runtimeReady ? 'PY READY' : 'LOADING PY'}</span>
-        <button className="curriculum-button" onClick={() => setCurriculumOpen(true)} aria-label="Open curriculum"><BookOpen /><span>CURRICULUM</span></button>
         <button onClick={() => setMuted((value) => !value)} aria-label="Toggle sound">{muted ? <VolumeX /> : <Volume2 />}</button>
         <button onClick={() => setHelpOpen(true)} aria-label="Keyboard help"><HelpCircle /></button>
       </div>
@@ -324,6 +325,14 @@ function App() {
 
     <section className="game-layout">
       <aside className="left-stats">
+        <button className="side-curriculum" onClick={() => setCurriculumOpen(true)}><BookOpen /><span>Curriculum</span><ChevronRight /></button>
+        <div className="lesson-card">
+          <div className="lesson-heading"><span>CURRENT LESSON</span><i>LEVEL {drop.level}</i></div>
+          <small>{drop.track}</small><strong>{drop.concept}</strong>
+          <div className="lesson-move"><div><Brain /><span>USE THIS MOVE</span></div><p>{technique.cue}</p></div>
+          <button className="reference-toggle" aria-expanded={referenceOpen} onClick={() => setReferenceOpen((value) => !value)}><span>QUICK REFERENCE</span><ChevronDown className={referenceOpen ? 'open' : ''} /></button>
+          {referenceOpen && <div className="reference-body"><code>{reference.signature}</code><p>{reference.note}</p>{reference.example && <pre>{reference.example}</pre>}</div>}
+        </div>
         <div className="stat-card combo-card"><span>COMBO</span><strong>{combo}<small>×</small></strong><div className="flames">{[0,1,2].map((n) => <Flame key={n} className={n < Math.min(combo,3) ? 'hot' : ''} />)}</div></div>
         <div className="stat-card life-card"><span>SHIELDS</span><div>{[0,1,2].map((n) => <i className={n < hearts ? 'full' : ''} key={n} />)}</div></div>
         <div className="controls-note"><Keyboard /><span><b>ESC</b> normal<br/><b>⌘ ↵</b> fire</span></div>
@@ -331,16 +340,16 @@ function App() {
 
       <section className={`well ${drop.mode === 'code' ? 'code-mode' : ''}`} aria-label="Active code drop">
         <div className="well-grid" /><div className="time-rail"><i style={{ height: `${progress}%` }} className={danger ? 'danger' : ''} /></div>
-        <div className="drop-head"><div className={`drop-kind ${drop.color}`}><Zap fill="currentColor" />{drop.label}{solved.has(drop.id) && <span className="cleared-tag"><Check /> CLEARED</span>}</div><div className={`clock ${danger ? 'danger' : ''}`}><small>{started ? 'DROP IN' : 'READY'}</small><strong>{started ? time.toFixed(1) : drop.seconds.toFixed(1)}</strong></div></div>
+        <div className="drop-head"><div className={`drop-kind ${drop.color}`}><Zap fill="currentColor" />CODE DROP{solved.has(drop.id) && <span className="cleared-tag"><Check /> CLEARED</span>}</div><div className={`clock ${danger ? 'danger' : ''}`}><small>{started ? 'DROP IN' : 'READY'}</small><strong>{started ? time.toFixed(1) : drop.seconds.toFixed(1)}</strong></div></div>
         <div className="challenge-core">
-          <div className="challenge-copy"><div className="concept-banner"><span>FOCUS</span>{drop.concept}<em>LVL {drop.level}</em></div><p>{drop.mode === 'code' ? 'BUILD A FUNCTION FOR THE' : 'MAKE THIS RETURN THE'}</p><h1>{drop.task}</h1><div className="drop-description">{drop.description}</div></div>
-          <div className="challenge-context"><div className="technique-cue"><Brain /> <span><b>USE THIS MOVE</b>{technique.cue}</span></div><div className="io-blocks"><div><span>INPUT</span><code>{drop.input}</code></div><ChevronRight /><div className="output-block"><span>TARGET</span><code>{drop.output}</code></div></div></div>
+          <div className="challenge-copy"><h1>{drop.task}</h1><div className="drop-description">{drop.description}</div></div>
+          <div className="challenge-context"><div className="io-blocks"><div><span>INPUT</span><code>{drop.input}</code></div><ChevronRight /><div className="output-block"><span>TARGET</span><code>{drop.output}</code></div></div></div>
         </div>
         <div className={`code-dock ${drop.mode === 'code' ? 'multiline' : ''} ${diagnostic && diagnostic.kind !== 'success' ? 'has-error' : ''}`}>
           <div className="signature"><div className="signature-code"><span>def</span> solve({drop.signature}):</div><div className="editor-toggle" aria-label="Editor mode"><button className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
           <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
           {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code>input: {diagnostic.input}</code><code>expected: {diagnostic.expected}</code><code>received: {diagnostic.received}</code></div>}</div></div>}
-          <div className="dock-foot"><button className="skip" onClick={() => advance()}><SkipForward /> skip</button>{misses > 0 && <button className="solution-link" onClick={() => setSolutionOpen(true)}>view solution</button>}<span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd>⌘↵</kbd></button></div>
+          <div className="dock-foot"><button className="skip" onClick={() => advance()}><SkipForward /> skip</button>{misses > 0 && <button className="solution-link" onClick={() => setSolutionOpen(true)}>view solution</button>}<span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
         </div>
         {feedback && <div className={`feedback ${feedback.type}`}><span>{feedback.type === 'clear' ? <Check /> : feedback.type === 'coach' ? <Brain /> : <X />}</span><div><strong>{feedback.title}</strong><small>{feedback.detail}</small></div>{feedback.type === 'clear' && <Sparkles className="spark s1" />}{feedback.type === 'clear' && <Sparkles className="spark s2" />}</div>}
         <div className="block-stack">{stack.map((row, rowIndex) => <div className="stack-row" key={rowIndex}>{row.map((color, index) => <i key={index} className={color || 'empty'} />)}</div>)}</div>
