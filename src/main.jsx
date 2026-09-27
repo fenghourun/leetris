@@ -5,6 +5,7 @@ import { CURRICULUM, TRACKS } from './curriculum';
 import { BRIDGE_DRILLS } from './bridgeDrills';
 import { SOLUTIONS } from './solutions';
 import { referenceFor, techniqueFor } from './pedagogy';
+import { chooseNextIndex, chooseStartingIndex, nextReview } from './scheduler';
 import './styles.css';
 
 const STARTER_DROPS = [
@@ -56,7 +57,7 @@ function loadEditorStyle() {
 }
 
 function loadSolved() {
-  try { return new Set(JSON.parse(localStorage.getItem(SOLVED_KEY)) || []); }
+  try { return new Set((JSON.parse(localStorage.getItem(SOLVED_KEY)) || []).filter((id) => typeof id === 'string')); }
   catch { return new Set(); }
 }
 
@@ -66,25 +67,7 @@ function loadReviews() {
 }
 
 function startingDrop() {
-  const reviews = loadReviews();
-  const due = DROPS.findIndex((item) => reviews[item.id]?.dueAt <= Date.now());
-  if (due >= 0) return due;
-  const solved = loadSolved();
-  const fresh = DROPS.findIndex((item) => !solved.has(item.id));
-  return fresh < 0 ? 0 : fresh;
-}
-
-function nextUnsolvedIndex(current, solved) {
-  const reviews = loadReviews();
-  for (let offset = 1; offset <= DROPS.length; offset += 1) {
-    const candidate = (current + offset) % DROPS.length;
-    if (reviews[DROPS[candidate].id]?.dueAt <= Date.now()) return candidate;
-  }
-  for (let offset = 1; offset <= DROPS.length; offset += 1) {
-    const candidate = (current + offset) % DROPS.length;
-    if (!solved.has(DROPS[candidate].id)) return candidate;
-  }
-  return (current + 1) % DROPS.length;
+  return chooseStartingIndex(DROPS, loadSolved(), loadReviews());
 }
 
 function useGameClock(duration, active, paused, resetKey, onExpire) {
@@ -211,9 +194,16 @@ function App() {
   const [muted, setMuted] = useState(false);
   const workerRef = useRef(null);
   const timeoutRef = useRef(null);
+  const transitionTimerRef = useRef(null);
+  const activeRunRef = useRef(null);
+  const workerMessageRef = useRef(null);
   const timeRef = useRef(drop.seconds);
   const missesRef = useRef(misses);
   missesRef.current = misses;
+  const solvedRef = useRef(solved);
+  solvedRef.current = solved;
+  const reviewsRef = useRef(reviews);
+  reviewsRef.current = reviews;
 
   useEffect(() => localStorage.setItem(SOLVED_KEY, JSON.stringify([...solved])), [solved]);
   useEffect(() => localStorage.setItem(REVIEW_KEY, JSON.stringify(reviews)), [reviews]);
@@ -229,59 +219,89 @@ function App() {
     setMode(style === 'vim' ? 'INSERT' : 'EDIT');
   };
 
-  function advance(newlySolved) {
-    const completed = new Set(solved);
+  function advance(newlySolved, reviewSnapshot) {
+    clearTimeout(transitionTimerRef.current);
+    clearTimeout(timeoutRef.current);
+    activeRunRef.current = null;
+    const completed = new Set(solvedRef.current);
     if (newlySolved) completed.add(newlySolved);
-    setDropIndex((index) => nextUnsolvedIndex(index, completed));
+    setDropIndex((index) => chooseNextIndex(DROPS, index, completed, reviewSnapshot || reviewsRef.current));
     setAnswer(''); setFeedback(null); setDiagnostic(null); setRunning(false); setStarted(false); setPaused(false); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setMisses(0); setResetKey((key) => key + 1);
   }
+
+  workerMessageRef.current = (data) => {
+    if (data.type === 'ready') { setRuntimeReady(true); return; }
+    if (data.type === 'boot-error') { setRuntimeReady(false); setDiagnostic({ title: 'Runtime unavailable', message: data.error || 'The Python runtime could not load. Check your connection and refresh.' }); return; }
+    if (data.type !== 'result' && data.type !== 'error') return;
+
+    const context = activeRunRef.current;
+    if (!context || data.id !== context.id || context.drop.id !== drop.id) return;
+    activeRunRef.current = null;
+    clearTimeout(timeoutRef.current);
+    setRunning(false);
+    const runDrop = context.drop;
+
+    if (data.type === 'result' && data.result.passed === runDrop.tests.length) {
+      const bonus = Math.round(timeRef.current * 10);
+      const completed = new Set(solvedRef.current).add(runDrop.id);
+      const updatedReviews = { ...reviewsRef.current, [runDrop.id]: nextReview(reviewsRef.current[runDrop.id], context.misses) };
+      solvedRef.current = completed;
+      reviewsRef.current = updatedReviews;
+      setScore((value) => value + runDrop.xp + bonus);
+      setCombo((value) => value + 1);
+      setStack((rows) => rows.length > 1 ? rows.slice(1) : []);
+      setSolved(completed);
+      setReviews(updatedReviews);
+      setDiagnostic({ kind: 'success', title: 'All hidden tests passed', message: runDrop.insight });
+      setFeedback({ type: 'clear', title: 'BLOCK CLEARED', detail: `${runDrop.insight} · +${runDrop.xp + bonus}` });
+      transitionTimerRef.current = setTimeout(() => advance(runDrop.id, updatedReviews), 1250);
+      return;
+    }
+
+    const failed = data.result?.cases?.find((item) => !item.passed);
+    const updatedReviews = { ...reviewsRef.current, [runDrop.id]: { ...(reviewsRef.current[runDrop.id] || {}), attempts: (reviewsRef.current[runDrop.id]?.attempts || 0) + 1, dueAt: Date.now() } };
+    reviewsRef.current = updatedReviews;
+    setMisses((value) => value + 1);
+    setCombo(0);
+    setReviews(updatedReviews);
+    setDiagnostic(data.result?.error
+      ? { title: 'Python error', message: data.result.error.trim() }
+      : data.type === 'error'
+        ? { title: 'Execution error', message: data.error }
+        : { title: 'Hidden test failed', input: failed?.input, expected: failed?.expected, received: failed?.actual });
+  };
 
   const createWorker = useCallback(() => {
     workerRef.current?.terminate(); setRuntimeReady(false);
     const worker = new Worker(`${import.meta.env.BASE_URL}pyodide-worker.js`);
     workerRef.current = worker;
-    worker.onmessage = ({ data }) => {
-      if (data.type === 'ready') setRuntimeReady(true);
-      if (data.type === 'boot-error') { setRuntimeReady(false); setDiagnostic({ title: 'Runtime unavailable', message: data.error || 'The Python runtime could not load. Check your connection and refresh.' }); }
-      if (data.type === 'result' || data.type === 'error') {
-        clearTimeout(timeoutRef.current); setRunning(false);
-        if (data.type === 'result' && data.result.passed === drop.tests.length) {
-          const bonus = Math.round(timeRef.current * 10);
-          setScore((value) => value + drop.xp + bonus); setCombo((value) => value + 1); setStack((rows) => rows.length > 1 ? rows.slice(1) : []); setSolved((items) => new Set(items).add(drop.id));
-          setReviews((current) => {
-            const previous = current[drop.id] || { repetitions: 0, attempts: 0 };
-            const repetitions = Math.min(previous.repetitions + 1, 5);
-            const intervals = [1, 3, 7, 14, 30, 60];
-            const intervalDays = missesRef.current === 0 ? intervals[repetitions - 1] : 1;
-            return { ...current, [drop.id]: { repetitions, attempts: previous.attempts + 1, intervalDays, dueAt: Date.now() + intervalDays * 86400000, lastScore: missesRef.current === 0 ? 'clean' : 'learned' } };
-          });
-          setDiagnostic({ kind: 'success', title: 'All hidden tests passed', message: drop.insight });
-          setFeedback({ type: 'clear', title: 'BLOCK CLEARED', detail: `${drop.insight} · +${drop.xp + bonus}` });
-          setTimeout(() => advance(drop.id), 1250);
-        } else {
-          const failed = data.result?.cases?.find((item) => !item.passed);
-          setMisses((value) => value + 1); setCombo(0);
-          setReviews((current) => ({ ...current, [drop.id]: { ...(current[drop.id] || {}), attempts: (current[drop.id]?.attempts || 0) + 1, dueAt: Date.now() } }));
-          setDiagnostic(data.result?.error
-            ? { title: 'Python error', message: data.result.error.trim() }
-            : data.type === 'error'
-              ? { title: 'Execution error', message: data.error }
-              : { title: 'Hidden test failed', input: failed?.input, expected: failed?.expected, received: failed?.actual });
-        }
-      }
-    };
+    worker.onmessage = ({ data }) => workerMessageRef.current?.(data);
     return worker;
-  }, [drop]);
+  }, []);
 
-  useEffect(() => { const worker = createWorker(); return () => worker.terminate(); }, [dropIndex]);
+  const cancelRun = () => {
+    clearTimeout(timeoutRef.current);
+    activeRunRef.current = null;
+    if (running) createWorker();
+    setRunning(false);
+  };
+
+  useEffect(() => {
+    createWorker();
+    return () => { clearTimeout(timeoutRef.current); clearTimeout(transitionTimerRef.current); workerRef.current?.terminate(); };
+  }, [createWorker]);
 
   const expire = useCallback(() => {
     if (!started) return;
+    clearTimeout(timeoutRef.current);
+    activeRunRef.current = null;
+    if (running) createWorker();
+    setRunning(false);
     setHearts((value) => Math.max(0, value - 1)); setCombo(0);
     setStack((rows) => [...rows, Array.from({ length: 10 }, (_, index) => index === 4 ? null : drop.color)]);
     setFeedback({ type: 'error', title: 'BLOCK LANDED', detail: 'Keep the stack low' });
-    setTimeout(advance, 900);
-  }, [started, drop.color]);
+    transitionTimerRef.current = setTimeout(() => advance(), 900);
+  }, [started, drop.color, running, createWorker]);
 
   const time = useGameClock(drop.seconds, started && !feedback, paused, resetKey, expire);
   timeRef.current = time;
@@ -297,12 +317,16 @@ function App() {
     setStarted(true); setRunning(true); setFeedback(null); setDiagnostic(null);
     const body = drop.mode === 'code' ? answer.split('\n').map((line) => `    ${line}`).join('\n') : `    return ${answer}`;
     const code = `def solve(${drop.signature}):\n${body}`;
-    workerRef.current.postMessage({ type: 'run', id: Date.now(), code, tests: drop.tests });
-    timeoutRef.current = setTimeout(() => { workerRef.current?.terminate(); setRunning(false); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work.' }); createWorker(); }, 4000);
+    const runId = Date.now();
+    activeRunRef.current = { id: runId, drop, misses: missesRef.current };
+    workerRef.current.postMessage({ type: 'run', id: runId, code, tests: drop.tests });
+    timeoutRef.current = setTimeout(() => { activeRunRef.current = null; workerRef.current?.terminate(); setRunning(false); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work.' }); createWorker(); }, 4000);
   };
 
   const resetGame = () => {
-    setDropIndex(0); setAnswer(''); setStarted(false); setPaused(false); setFeedback(null); setDiagnostic(null); setSolutionOpen(false); setScore(0); setCombo(0); setHearts(3); setStack(initialStack); setMisses(0); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setResetKey((key) => key + 1);
+    cancelRun();
+    clearTimeout(transitionTimerRef.current);
+    setDropIndex(chooseStartingIndex(DROPS, solvedRef.current, reviewsRef.current)); setAnswer(''); setStarted(false); setPaused(false); setFeedback(null); setDiagnostic(null); setSolutionOpen(false); setScore(0); setCombo(0); setHearts(3); setStack(initialStack); setMisses(0); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setResetKey((key) => key + 1);
   };
 
   const progress = (time / drop.seconds) * 100;
@@ -345,7 +369,7 @@ function App() {
           <div className="signature"><div className="signature-code"><span>def</span> solve({drop.signature}):</div><div className="editor-toggle" aria-label="Editor mode"><button aria-pressed={editorStyle === 'standard'} className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button aria-pressed={editorStyle === 'vim'} className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
           <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}-${solutionOpen}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
           {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code><b>INPUT</b>{diagnostic.input}</code><code><b>EXPECTED</b>{diagnostic.expected}</code><code><b>RECEIVED</b>{diagnostic.received}</code></div>}</div>{diagnostic.kind !== 'success' && misses > 0 && <button className="diagnostic-solution" onClick={() => setSolutionOpen(true)}>View solution <ChevronRight /></button>}</div>}
-          <div className="dock-foot"><button className="skip" onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
+          <div className="dock-foot"><button className="skip" disabled={running || feedback?.type === 'clear'} onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
         </div>
         {feedback && <div className={`feedback ${feedback.type}`}><span>{feedback.type === 'clear' ? <Check /> : feedback.type === 'coach' ? <Brain /> : <X />}</span><div><strong>{feedback.title}</strong><small>{feedback.detail}</small></div>{feedback.type === 'clear' && <Sparkles className="spark s1" />}{feedback.type === 'clear' && <Sparkles className="spark s2" />}</div>}
         <div className="block-stack">{stack.map((row, rowIndex) => <div className="stack-row" key={rowIndex}>{row.map((color, index) => <i key={index} className={color || 'empty'} />)}</div>)}</div>
@@ -357,7 +381,7 @@ function App() {
     <footer className="footer-tip"><span><i /> {drop.mode === 'code' ? 'FUNCTION BODY' : 'ONE EXPRESSION'} · THREE HIDDEN TESTS · {drop.track.toUpperCase()}</span><em>{Object.values(reviews).filter((item) => item.dueAt <= Date.now()).length} reviews due · progress saved locally</em></footer>
     {paused && <div className="pause-screen" onClick={() => setPaused(false)}><Pause /><strong>FLOW PAUSED</strong><span>click anywhere to drop back in</span></div>}
     {solutionOpen && <div className="modal-backdrop" onMouseDown={() => setSolutionOpen(false)}><div className="solution-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setSolutionOpen(false)}><X /></button><span className="modal-kicker">CANONICAL MOVE · {drop.concept.toUpperCase()}</span><h2>Study the shape,<br/>then type it yourself.</h2><pre>{canonicalCode}</pre><div className="solution-why"><Brain /><div><strong>Why this works</strong><span>{drop.insight}</span></div></div><div className="solution-actions"><button onClick={() => setSolutionOpen(false)}>Keep trying</button><button onClick={() => { setAnswer(drop.mode === 'code' ? SOLUTIONS[drop.id] : drop.answer); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); }}>Load into editor <ChevronRight /></button></div></div></div>}
-    {curriculumOpen && <div className="modal-backdrop" onMouseDown={() => setCurriculumOpen(false)}><div className="curriculum-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setCurriculumOpen(false)}><X /></button><div className="curriculum-title"><Brain /><div><span>ADAPTIVE PATH</span><h2>Your curriculum</h2></div><strong>{solved.size}/{DROPS.length}</strong></div><p className="curriculum-copy">New patterns unlock in sequence. Cleared drops return after 1, 3, 7, 14, and 30 days to build durable recall.</p><div className="track-list">{TRACKS.map((track, trackIndex) => { const items = DROPS.filter((item) => item.track === track.name); const done = items.filter((item) => solved.has(item.id)).length; const firstIndex = DROPS.findIndex((item) => item.track === track.name && !solved.has(item.id)); return <button key={track.name} onClick={() => { setDropIndex(firstIndex >= 0 ? firstIndex : DROPS.findIndex((item) => item.track === track.name)); setCurriculumOpen(false); setAnswer(''); setFeedback(null); setDiagnostic(null); setStarted(false); setResetKey((key) => key + 1); }}><i>{String(trackIndex + 1).padStart(2, '0')}</i><div><strong>{track.name}</strong><small>{track.goal}</small></div><span>{done}/{items.length}</span><ChevronRight /></button>; })}</div></div></div>}
+    {curriculumOpen && <div className="modal-backdrop" onMouseDown={() => setCurriculumOpen(false)}><div className="curriculum-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setCurriculumOpen(false)}><X /></button><div className="curriculum-title"><Brain /><div><span>ADAPTIVE PATH</span><h2>Your curriculum</h2></div><strong>{solved.size}/{DROPS.length}</strong></div><p className="curriculum-copy">New patterns unlock in sequence. Cleared drops return after 1, 3, 7, 14, and 30 days to build durable recall.</p><div className="track-list">{TRACKS.map((track, trackIndex) => { const items = DROPS.filter((item) => item.track === track.name); const done = items.filter((item) => solved.has(item.id)).length; const firstIndex = DROPS.findIndex((item) => item.track === track.name && !solved.has(item.id)); return <button key={track.name} onClick={() => { cancelRun(); clearTimeout(transitionTimerRef.current); setDropIndex(firstIndex >= 0 ? firstIndex : DROPS.findIndex((item) => item.track === track.name)); setCurriculumOpen(false); setAnswer(''); setFeedback(null); setDiagnostic(null); setStarted(false); setResetKey((key) => key + 1); }}><i>{String(trackIndex + 1).padStart(2, '0')}</i><div><strong>{track.name}</strong><small>{track.goal}</small></div><span>{done}/{items.length}</span><ChevronRight /></button>; })}</div></div></div>}
     {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}><div className="help-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setHelpOpen(false)}><X /></button><span className="modal-kicker">VIM MODE IS ALWAYS ON</span><h2>Hands on keys.<br/>Eyes on the drop.</h2><div className="keys"><kbd>esc</kbd><span>normal mode</span><kbd>i / a</kbd><span>insert / append</span><kbd>h j k l</kbd><span>move</span><kbd>w / b</kbd><span>jump words</span><kbd>0 / $</kbd><span>edges</span><kbd>x / u</kbd><span>delete / undo</span><kbd>⌘ ↵</kbd><span>fire</span><kbd>tab</kbd><span>indent code</span></div><button className="got-it" onClick={() => setHelpOpen(false)}>Got it <ChevronRight /></button></div></div>}
   </main>;
 }
