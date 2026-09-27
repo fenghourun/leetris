@@ -103,7 +103,7 @@ function useGameClock(duration, active, paused, resetKey, onExpire) {
 }
 
 function MiniBlock({ drop, ghost = false, solved = false }) {
-  return <div className={`mini-block ${drop.color} ${ghost ? 'ghost' : ''} ${solved ? 'solved' : ''}`}><span>{solved && <Check />} {drop.label}</span><small>{solved ? 'CLEARED' : `${drop.seconds}s`}</small></div>;
+  return <div className={`mini-block ${drop.color} ${ghost ? 'ghost' : ''} ${solved ? 'solved' : ''}`}><span>{solved && <Check />} {drop.label}</span><strong>{drop.task}</strong><small>{solved ? 'CLEARED' : `${drop.seconds}s`}</small></div>;
 }
 
 function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, focusSignal, multiline, vimEnabled }) {
@@ -242,7 +242,7 @@ function App() {
     workerRef.current = worker;
     worker.onmessage = ({ data }) => {
       if (data.type === 'ready') setRuntimeReady(true);
-      if (data.type === 'boot-error') { setRuntimeReady(false); setFeedback({ type: 'error', title: 'PYTHON IS OFFLINE', detail: 'Check your connection' }); setDiagnostic({ title: 'Runtime unavailable', message: data.error || 'The Python runtime could not load. Check your connection and refresh.' }); }
+      if (data.type === 'boot-error') { setRuntimeReady(false); setDiagnostic({ title: 'Runtime unavailable', message: data.error || 'The Python runtime could not load. Check your connection and refresh.' }); }
       if (data.type === 'result' || data.type === 'error') {
         clearTimeout(timeoutRef.current); setRunning(false);
         if (data.type === 'result' && data.result.passed === drop.tests.length) {
@@ -267,8 +267,6 @@ function App() {
             : data.type === 'error'
               ? { title: 'Execution error', message: data.error }
               : { title: 'Hidden test failed', input: failed?.input, expected: failed?.expected, received: failed?.actual });
-          setFeedback({ type: 'error', title: 'NOT QUITE', detail: failed ? `${failed.input} → ${failed.actual}` : 'Check the expression' });
-          setTimeout(() => setFeedback(null), 1450);
         }
       }
     };
@@ -293,8 +291,6 @@ function App() {
     if (technique.enforced && !technique.pattern.test(answer)) {
       setMisses((value) => value + 1);
       setDiagnostic({ title: 'Technique mismatch', message: technique.cue });
-      setFeedback({ type: 'coach', title: 'USE THE FOCUS MOVE', detail: technique.cue });
-      setTimeout(() => setFeedback(null), 1800);
       return;
     }
     if (!runtimeReady) { setFeedback({ type: 'error', title: 'WARMING UP', detail: 'Python will be ready in a moment' }); setTimeout(() => setFeedback(null), 1100); return; }
@@ -302,7 +298,7 @@ function App() {
     const body = drop.mode === 'code' ? answer.split('\n').map((line) => `    ${line}`).join('\n') : `    return ${answer}`;
     const code = `def solve(${drop.signature}):\n${body}`;
     workerRef.current.postMessage({ type: 'run', id: Date.now(), code, tests: drop.tests });
-    timeoutRef.current = setTimeout(() => { workerRef.current?.terminate(); setRunning(false); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work.' }); setFeedback({ type: 'error', title: 'TOO SLOW', detail: 'Execution took over 4 seconds' }); createWorker(); }, 4000);
+    timeoutRef.current = setTimeout(() => { workerRef.current?.terminate(); setRunning(false); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work.' }); createWorker(); }, 4000);
   };
 
   const resetGame = () => {
@@ -312,7 +308,7 @@ function App() {
   const progress = (time / drop.seconds) * 100;
   const danger = time < 6 && started;
 
-  return <main className={`game ${feedback?.type === 'error' ? 'shake' : ''}`}>
+  return <main className={`game ${diagnostic && diagnostic.kind !== 'success' ? 'has-diagnostic' : ''}`}>
     <header className="hud">
       <button className="logo" onClick={resetGame} aria-label="Reset game"><span className="logo-stack"><i /><i /><i /></span><strong>LEETRIS</strong></button>
       <div className="hud-score"><small>SCORE</small><strong>{score.toLocaleString().padStart(6, '0')}</strong></div>
@@ -346,10 +342,10 @@ function App() {
           <div className="challenge-context"><div className="io-blocks"><div><span>INPUT</span><code>{drop.input}</code></div><ChevronRight /><div className="output-block"><span>TARGET</span><code>{drop.output}</code></div></div></div>
         </div>
         <div className={`code-dock ${drop.mode === 'code' ? 'multiline' : ''} ${diagnostic && diagnostic.kind !== 'success' ? 'has-error' : ''}`}>
-          <div className="signature"><div className="signature-code"><span>def</span> solve({drop.signature}):</div><div className="editor-toggle" aria-label="Editor mode"><button className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
-          <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
-          {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code>input: {diagnostic.input}</code><code>expected: {diagnostic.expected}</code><code>received: {diagnostic.received}</code></div>}</div></div>}
-          <div className="dock-foot"><button className="skip" onClick={() => advance()}><SkipForward /> skip</button>{misses > 0 && <button className="solution-link" onClick={() => setSolutionOpen(true)}>view solution</button>}<span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
+          <div className="signature"><div className="signature-code"><span>def</span> solve({drop.signature}):</div><div className="editor-toggle" aria-label="Editor mode"><button aria-pressed={editorStyle === 'standard'} className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button aria-pressed={editorStyle === 'vim'} className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
+          <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}-${solutionOpen}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
+          {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code><b>INPUT</b>{diagnostic.input}</code><code><b>EXPECTED</b>{diagnostic.expected}</code><code><b>RECEIVED</b>{diagnostic.received}</code></div>}</div>{diagnostic.kind !== 'success' && misses > 0 && <button className="diagnostic-solution" onClick={() => setSolutionOpen(true)}>View solution <ChevronRight /></button>}</div>}
+          <div className="dock-foot"><button className="skip" onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
         </div>
         {feedback && <div className={`feedback ${feedback.type}`}><span>{feedback.type === 'clear' ? <Check /> : feedback.type === 'coach' ? <Brain /> : <X />}</span><div><strong>{feedback.title}</strong><small>{feedback.detail}</small></div>{feedback.type === 'clear' && <Sparkles className="spark s1" />}{feedback.type === 'clear' && <Sparkles className="spark s2" />}</div>}
         <div className="block-stack">{stack.map((row, rowIndex) => <div className="stack-row" key={rowIndex}>{row.map((color, index) => <i key={index} className={color || 'empty'} />)}</div>)}</div>
