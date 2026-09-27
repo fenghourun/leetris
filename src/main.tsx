@@ -1,5 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import CodeMirror from '@uiw/react-codemirror';
+import { python } from '@codemirror/lang-python';
+import { oneDark } from '@codemirror/theme-one-dark';
+import { getCM, Vim, vim } from '@replit/codemirror-vim';
+import { EditorView } from '@codemirror/view';
 import { BookOpen, Brain, Check, ChevronDown, ChevronRight, Command, CornerDownLeft, Flame, HelpCircle, Keyboard, Pause, Play, SkipForward, Sparkles, Volume2, VolumeX, X, Zap } from 'lucide-react';
 import { CURRICULUM, TRACKS } from './curriculum';
 import { BRIDGE_DRILLS } from './bridgeDrills';
@@ -128,83 +133,47 @@ interface ActiveRun {
 }
 
 function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, focusSignal, multiline, vimEnabled }: VimInputProps) {
-  const ref = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
-  const history = useRef<string[]>([]);
-  useEffect(() => { const timer = setTimeout(() => ref.current?.focus(), 120); return () => clearTimeout(timer); }, []);
+  const viewRef = useRef<EditorView | null>(null);
+  const extensions = useMemo(() => [
+    ...(vimEnabled ? [vim({ status: false })] : []),
+    python(),
+    EditorView.lineWrapping,
+    EditorView.contentAttributes.of({ 'aria-label': multiline ? 'Python function body' : 'Python expression' }),
+  ], [vimEnabled, multiline]);
+
+  useEffect(() => { const timer = setTimeout(() => viewRef.current?.focus(), 120); return () => clearTimeout(timer); }, []);
   useEffect(() => {
     if (disabled) return;
-    const timer = setTimeout(() => ref.current?.focus(), 30);
+    const timer = setTimeout(() => viewRef.current?.focus(), 30);
     return () => clearTimeout(timer);
   }, [focusSignal, disabled]);
 
-  const moveWord = (direction: number) => {
-    const el = ref.current;
-    if (!el) return;
-    const pos = el.selectionStart ?? 0;
-    if (direction > 0) {
-      const rest = value.slice(pos);
-      const match = rest.match(/\W+\w|$/);
-      const next = Math.min(value.length, pos + (match?.index ?? rest.length) + (match?.[0]?.length ? 1 : 0));
-      el.setSelectionRange(next, next);
-    } else {
-      const before = value.slice(0, pos);
-      const match = before.match(/\w+\W*$/);
-      const next = match ? before.length - match[0].length : 0;
-      el.setSelectionRange(next, next);
-    }
-  };
-
-  const moveLine = (direction: number) => {
-    const el = ref.current;
-    if (!el) return;
-    const selectionStart = el.selectionStart ?? 0;
-    const before = value.slice(0, selectionStart);
-    const rowStart = before.lastIndexOf('\n') + 1;
-    const column = selectionStart - rowStart;
-    const lines = value.split('\n');
-    const row = before.split('\n').length - 1;
-    const nextRow = Math.max(0, Math.min(lines.length - 1, row + direction));
-    const next = lines.slice(0, nextRow).reduce((sum, line) => sum + line.length + 1, 0) + Math.min(column, lines[nextRow]!.length);
-    el.setSelectionRange(next, next);
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const el = ref.current;
-    if (!el) return;
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); onRun(); return; }
-    if (multiline && event.key === 'Tab' && (!vimEnabled || mode === 'INSERT')) {
-      event.preventDefault();
-      const start = el.selectionStart ?? 0;
-      setValue(value.slice(0, start) + '    ' + value.slice(el.selectionEnd ?? start));
-      requestAnimationFrame(() => el.setSelectionRange(start + 4, start + 4));
-      return;
-    }
+  const createEditor = (view: EditorView) => {
+    viewRef.current = view;
     if (!vimEnabled) return;
-    if (event.key === 'Escape') { event.preventDefault(); setMode('NORMAL'); return; }
-    if (mode !== 'NORMAL') return;
-    event.preventDefault();
-    const pos = el.selectionStart ?? 0;
-    if (event.key === 'h') el.setSelectionRange(Math.max(0, pos - 1), Math.max(0, pos - 1));
-    if (event.key === 'l') el.setSelectionRange(Math.min(value.length, pos + 1), Math.min(value.length, pos + 1));
-    if (event.key === 'j' && multiline) moveLine(1);
-    if (event.key === 'k' && multiline) moveLine(-1);
-    if (event.key === '0') el.setSelectionRange(0, 0);
-    if (event.key === '$') el.setSelectionRange(value.length, value.length);
-    if (event.key === 'w') moveWord(1);
-    if (event.key === 'b') moveWord(-1);
-    if (event.key === 'i') setMode('INSERT');
-    if (event.key === 'a') { const next = Math.min(value.length, pos + 1); el.setSelectionRange(next, next); setMode('INSERT'); }
-    if (event.key === 'x') { history.current.push(value); setValue(value.slice(0, pos) + value.slice(pos + 1)); requestAnimationFrame(() => el.setSelectionRange(pos, pos)); }
-    if (event.key === 'u' && history.current.length) setValue(history.current.pop()!);
+    const cm = getCM(view);
+    if (!cm) return;
+    cm.on('vim-mode-change', (event: { mode: string }) => setMode(event.mode === 'insert' ? 'INSERT' : 'NORMAL'));
+    Vim.handleKey(cm, 'i', 'user');
+    setMode('INSERT');
   };
 
-  const Field = multiline ? 'textarea' : 'input';
-  return <div className={`input-wrap ${vimEnabled ? 'vim-editor' : 'standard-editor'} ${mode.toLowerCase()} ${disabled ? 'disabled' : ''} ${multiline ? 'multiline' : ''}`}>
+  const handleKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      onRun();
+    }
+  };
+
+  return <div onKeyDownCapture={handleKeys} className={`input-wrap cm-input ${vimEnabled ? 'vim-editor' : 'standard-editor'} ${mode.toLowerCase()} ${disabled ? 'disabled' : ''} ${multiline ? 'multiline' : ''}`}>
     {!multiline && <span className="return-token">return</span>}
-    <Field ref={(node: HTMLInputElement | HTMLTextAreaElement | null) => { ref.current = node; }} aria-label={multiline ? 'Python function body' : 'Python expression'} value={value} disabled={disabled}
-      onChange={(event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => { history.current.push(value); setValue(event.target.value); onStart(); }}
-      onKeyDown={onKeyDown}
-      placeholder={multiline ? '# write the function body' : 'your_expression'} autoComplete="off" autoCapitalize="off" spellCheck="false" />
+    <CodeMirror key={vimEnabled ? 'vim' : 'standard'} aria-label={multiline ? 'Python function body' : 'Python expression'} value={value}
+      height="100%" theme={oneDark} extensions={extensions} editable={!disabled} autoFocus
+      basicSetup={{ lineNumbers: multiline, foldGutter: false, highlightActiveLineGutter: false, highlightActiveLine: false, autocompletion: false, bracketMatching: true, closeBrackets: true }}
+      placeholder={multiline ? '# write the function body' : 'your_expression'}
+      onCreateEditor={createEditor}
+      onChange={(nextValue) => { setValue(nextValue); onStart(); }} />
     <span className="mode-chip">{vimEnabled ? mode : 'STANDARD'}</span>
   </div>;
 }
