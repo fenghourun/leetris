@@ -24,6 +24,28 @@ test('Vim normal mode and help overlay are keyboard accessible', async ({ page }
   await expect(page.getByRole('heading', { name: /Hands on keys/ })).toBeVisible();
 });
 
+test('Tab and Shift-Tab use four-space Python indentation', async ({ page }) => {
+  await page.goto('/');
+  const editor = page.getByLabel('Python solution editor');
+  await editor.click();
+  await page.keyboard.press('Tab');
+  expect(await page.locator('.cm-line').nth(1).textContent()).toBe('        return ');
+  await page.keyboard.press('Shift+Tab');
+  expect(await page.locator('.cm-line').nth(1).textContent()).toBe('    return ');
+});
+
+test('a wrong answer stays on the current problem until the learner chooses', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('PY READY')).toBeVisible({ timeout: 20_000 });
+  await page.getByLabel('Python solution editor').fill('def solve(nums):\n    return 999');
+  await page.getByRole('button', { name: /FIRE/ }).click();
+
+  await expect(page.getByText('Hidden test failed')).toBeVisible({ timeout: 10_000 });
+  await page.waitForTimeout(1_500);
+  await expect(page.getByRole('heading', { name: 'smallest number' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /next problem/ })).toBeVisible();
+});
+
 test('track selection starts a focused loop at its smallest chunk', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: /Curriculum/ }).click();

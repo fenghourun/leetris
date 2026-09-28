@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client';
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
+import { indentUnit } from '@codemirror/language';
+import { indentLess, indentMore } from '@codemirror/commands';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { getCM, Vim, vim } from '@replit/codemirror-vim';
 import { EditorView, ViewUpdate } from '@codemirror/view';
@@ -168,6 +170,7 @@ function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, fo
   const extensions = useMemo(() => [
     ...(vimEnabled ? [vim({ status: false })] : []),
     python(),
+    indentUnit.of('    '),
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({ 'aria-label': 'Python solution editor' }),
   ], [vimEnabled, multiline]);
@@ -191,6 +194,16 @@ function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, fo
   };
 
   const handleKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Tab' && (!vimEnabled || mode === 'INSERT')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const view = viewRef.current;
+      if (view) {
+        (event.shiftKey ? indentLess : indentMore)(view);
+        onStart();
+      }
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       event.stopPropagation();
@@ -201,6 +214,7 @@ function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, fo
   return <div onKeyDownCapture={handleKeys} className={`input-wrap cm-input ${vimEnabled ? 'vim-editor' : 'standard-editor'} ${mode.toLowerCase()} ${disabled ? 'disabled' : ''} ${multiline ? 'multiline' : ''}`}>
     <CodeMirror key={vimEnabled ? 'vim' : 'standard'} aria-label="Python solution editor" value={value}
       height="100%" theme={oneDark} extensions={extensions} editable={!disabled} autoFocus
+      indentWithTab={false}
       basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLineGutter: false, highlightActiveLine: false, autocompletion: false, bracketMatching: true, closeBrackets: true }}
       placeholder="# write your solution"
       onCreateEditor={createEditor}
@@ -353,6 +367,8 @@ function App() {
     reviewsRef.current = updatedReviews;
     setMisses((value) => value + 1);
     setCombo(0);
+    setStarted(false);
+    setResetKey((key) => key + 1);
     setReviews(updatedReviews);
     setDiagnostic(result?.error
       ? { title: 'Python error', message: result.error.trim() }
@@ -388,9 +404,10 @@ function App() {
     if (running) createWorker();
     setRunning(false);
     setHearts((value) => Math.max(0, value - 1)); setCombo(0);
+    setMisses((value) => value + 1); setStarted(false); setResetKey((key) => key + 1);
     setStack((rows) => [...rows, Array.from({ length: 10 }, (_, index) => index === 4 ? null : drop.color)]);
-    setFeedback({ type: 'error', title: 'BLOCK LANDED', detail: 'Keep the stack low' });
-    transitionTimerRef.current = setTimeout(() => advance(), 900);
+    setFeedback(null);
+    setDiagnostic({ title: 'Time expired', message: 'This drop is still yours. Edit and retry, study the solution, or choose the next problem.' });
   }, [started, drop.color, running, createWorker]);
 
   const overlaysOpen = helpOpen || curriculumOpen || solutionOpen;
@@ -405,7 +422,7 @@ function App() {
     const runId = Date.now();
     activeRunRef.current = { id: runId, drop, misses: missesRef.current, techniqueMatched: !techniqueMismatch };
     workerRef.current?.postMessage({ type: 'run', id: runId, code, tests: drop.tests });
-    timeoutRef.current = setTimeout(() => { activeRunRef.current = null; workerRef.current?.terminate(); setRunning(false); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work.' }); createWorker(); }, 4000);
+    timeoutRef.current = setTimeout(() => { activeRunRef.current = null; workerRef.current?.terminate(); setRunning(false); setStarted(false); setMisses((value) => value + 1); setResetKey((key) => key + 1); setDiagnostic({ title: 'Time limit exceeded', message: 'Your function ran for more than 4 seconds. Check for an infinite loop or reduce repeated work, then retry—or choose the next problem.' }); createWorker(); }, 4000);
   };
 
   const resetGame = () => {
@@ -458,7 +475,7 @@ function App() {
           <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}-${solutionOpen}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
           {techniqueMismatch && <div className="technique-warning" role="status"><Brain /><span><strong>Different approach</strong>Your code can still pass. This drill is targeting: {technique.cue}</span></div>}
           {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code><b>INPUT</b>{diagnostic.input}</code><code><b>EXPECTED</b>{diagnostic.expected}</code><code><b>RECEIVED</b>{diagnostic.received}</code></div>}</div>{diagnostic.kind !== 'success' && misses > 0 && <button className="diagnostic-solution" onClick={() => setSolutionOpen(true)}>View solution <ChevronRight /></button>}</div>}
-          <div className="dock-foot"><button className="skip" disabled={running || feedback?.type === 'clear'} onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={answer === starterCode(drop) || !answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
+          <div className="dock-foot"><button className="skip" disabled={running || feedback?.type === 'clear'} onClick={() => advance()}><SkipForward /> {diagnostic && diagnostic.kind !== 'success' ? 'next problem' : 'skip'}</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={answer === starterCode(drop) || !answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
         </div>
         {feedback && <div className={`feedback ${feedback.type}`} role="status" aria-live="polite"><span>{feedback.type === 'clear' ? <Check /> : feedback.type === 'coach' ? <Brain /> : <X />}</span><div><strong>{feedback.title}</strong><small>{feedback.detail}</small></div>{feedback.type === 'clear' && <Sparkles className="spark s1" />}{feedback.type === 'clear' && <Sparkles className="spark s2" />}</div>}
         <div className="block-stack">{stack.map((row, rowIndex) => <div className="stack-row" key={rowIndex}>{row.map((color, index) => <i key={index} className={color || 'empty'} />)}</div>)}</div>
