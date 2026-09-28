@@ -10,7 +10,16 @@ test('opens directly into a drop and passes a real Python expression', async ({ 
   await editor.fill('def solve(nums):\n    return min(nums)');
   await page.getByRole('button', { name: /FIRE/ }).click();
 
-  await expect(page.getByText('BLOCK CLEARED')).toBeVisible({ timeout: 10_000 });
+  const feedback = page.getByRole('status');
+  await expect(feedback.getByText('BLOCK CLEARED')).toBeVisible({ timeout: 10_000 });
+  const feedbackMetrics = await feedback.evaluate((element) => {
+    const title = element.querySelector('strong');
+    return { width: element.getBoundingClientRect().width, titleSize: title ? Number.parseFloat(getComputedStyle(title).fontSize) : 0 };
+  });
+  expect(feedbackMetrics.width).toBeGreaterThanOrEqual(280);
+  expect(feedbackMetrics.width).toBeLessThanOrEqual(432);
+  expect(feedbackMetrics.titleSize).toBeGreaterThanOrEqual(15);
+  expect(feedbackMetrics.titleSize).toBeLessThanOrEqual(18);
 });
 
 test('Vim normal mode and help overlay are keyboard accessible', async ({ page }) => {

@@ -233,6 +233,7 @@ function App() {
   const [dropIndex, setDropIndex] = useState(initialDropIndex);
   const drop = DROPS[dropIndex];
   const [answer, setAnswer] = useState(() => starterCode(DROPS[initialDropIndex]!));
+  const [exampleIndex, setExampleIndex] = useState(() => (reviews[DROPS[initialDropIndex]!.id]?.repetitions ?? 0) % DROPS[initialDropIndex]!.tests.length);
   const [editorStyle, setEditorStyle] = useState<EditorStyle>(loadEditorStyle);
   const [mode, setMode] = useState<VimMode>(() => loadEditorStyle() === 'vim' ? 'INSERT' : 'EDIT');
   const [started, setStarted] = useState(false);
@@ -292,7 +293,7 @@ function App() {
   const reference = referenceFor(drop);
   const repetitions = reviews[drop.id]?.repetitions ?? 0;
   const mastery = Math.min(repetitions, 5);
-  const example = exampleFor(drop, repetitions);
+  const example = exampleFor(drop, exampleIndex);
   const canonicalBody = drop.mode === 'code' ? (SOLUTIONS[drop.id] ?? '# Solution unavailable') : `return ${drop.answer ?? ''}`;
   const canonicalCode = `def solve(${drop.signature}):\n${canonicalBody.split('\n').map((line) => `    ${line}`).join('\n')}`;
 
@@ -323,8 +324,11 @@ function App() {
       nextIndex = trackIndices[chooseNextIndex(localDrops, localCurrent, completed, reviewSnapshot || reviewsRef.current)]!;
     }
     else nextIndex = chooseNextIndex(DROPS, dropIndex, completed, reviewSnapshot || reviewsRef.current);
+    const nextDrop = DROPS[nextIndex]!;
+    const nextReviews = reviewSnapshot || reviewsRef.current;
     setDropIndex(nextIndex);
-    setAnswer(starterCode(DROPS[nextIndex]!)); setFeedback(null); setDiagnostic(null); setRunning(false); setStarted(false); setPaused(false); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setMisses(0); setResetKey((key) => key + 1);
+    setExampleIndex((nextReviews[nextDrop.id]?.repetitions ?? 0) % nextDrop.tests.length);
+    setAnswer(starterCode(nextDrop)); setFeedback(null); setDiagnostic(null); setRunning(false); setStarted(false); setPaused(false); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setMisses(0); setResetKey((key) => key + 1);
   }
 
   workerMessageRef.current = (data: WorkerMessage) => {
@@ -357,7 +361,7 @@ function App() {
       }
       setDiagnostic({ kind: 'success', title: 'All hidden tests passed', message: runDrop.insight });
       setFeedback({ type: 'clear', title: 'BLOCK CLEARED', detail: context.techniqueMatched ? `${runDrop.insight} · +${runDrop.xp + bonus}` : `Passed · focus-move review scheduled sooner · +${runDrop.xp + bonus}` });
-      transitionTimerRef.current = setTimeout(() => advance(runDrop.id, updatedReviews), 1250);
+      transitionTimerRef.current = setTimeout(() => advance(runDrop.id, updatedReviews), 1600);
       return;
     }
 
@@ -430,7 +434,8 @@ function App() {
     if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
     const nextIndex = chooseStartingIndex(DROPS, solvedRef.current, reviewsRef.current);
     reinforcementQueueRef.current = []; successfulTurnsRef.current = 0;
-    setPracticeTrack(null); setDropIndex(nextIndex); setAnswer(starterCode(DROPS[nextIndex]!)); setStarted(false); setPaused(false); setFeedback(null); setDiagnostic(null); setSolutionOpen(false); setScore(0); setCombo(0); setHearts(3); setStack(initialStack); setMisses(0); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setResetKey((key) => key + 1);
+    const nextDrop = DROPS[nextIndex]!;
+    setPracticeTrack(null); setDropIndex(nextIndex); setExampleIndex((reviewsRef.current[nextDrop.id]?.repetitions ?? 0) % nextDrop.tests.length); setAnswer(starterCode(nextDrop)); setStarted(false); setPaused(false); setFeedback(null); setDiagnostic(null); setSolutionOpen(false); setScore(0); setCombo(0); setHearts(3); setStack(initialStack); setMisses(0); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setResetKey((key) => key + 1);
   };
 
   const progress = (time / drop.seconds) * 100;
@@ -487,7 +492,7 @@ function App() {
     <footer className="footer-tip"><span><i /> {drop.mode === 'code' ? 'COMPLETE THE FUNCTION' : 'RETURN ONE EXPRESSION'} · THREE HIDDEN TESTS · {drop.track.toUpperCase()}</span><em>{Object.values(reviews).filter((item) => item.dueAt !== undefined && item.dueAt <= Date.now()).length} reviews due · progress saved locally</em></footer>
     {paused && <button className="pause-screen" onClick={() => setPaused(false)}><Pause /><strong>FLOW PAUSED</strong><span>click anywhere to drop back in</span></button>}
     {solutionOpen && <div className="modal-backdrop" onMouseDown={() => setSolutionOpen(false)}><div className="solution-modal" role="dialog" aria-modal="true" aria-labelledby="solution-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close solution" onClick={() => setSolutionOpen(false)}><X /></button><span className="modal-kicker">CANONICAL MOVE · {drop.concept.toUpperCase()}</span><h2 id="solution-title">Study the shape,<br/>then type it yourself.</h2><pre>{canonicalCode}</pre><div className="solution-why"><Brain /><div><strong>Why this works</strong><span>{drop.insight}</span></div></div><div className="solution-actions"><button onClick={() => setSolutionOpen(false)}>Keep trying</button><button onClick={() => { setAnswer(canonicalCode); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); }}>Load into editor <ChevronRight /></button></div></div></div>}
-    {curriculumOpen && <div className="modal-backdrop" onMouseDown={() => setCurriculumOpen(false)}><div className="curriculum-modal" role="dialog" aria-modal="true" aria-labelledby="curriculum-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close curriculum" onClick={() => setCurriculumOpen(false)}><X /></button><div className="curriculum-title"><Brain /><div><span>ADAPTIVE PATH</span><h2 id="curriculum-title">Your curriculum</h2></div><strong>{solved.size}/{DROPS.length}</strong></div><p className="curriculum-copy">New patterns unlock in sequence. Fresh clears return after three other wins, then again after 1, 3, 7, 14, and 30 days.</p><div className="curriculum-mode"><span>{practiceTrack ? `TRACK LOOP · ${practiceTrack}` : 'ADAPTIVE MIX · ALL TRACKS'}</span>{practiceTrack && <button onClick={() => setPracticeTrack(null)}>Return to adaptive mix</button>}</div><div className="track-list">{TRACKS.map((track, trackIndex) => { const items = DROPS.filter((item) => item.track === track.name); const done = items.filter((item) => solved.has(item.id)).length; const firstIndex = DROPS.findIndex((item) => item.track === track.name && !solved.has(item.id)); return <button className={practiceTrack === track.name ? 'active' : ''} key={track.name} onClick={() => { cancelRun(); if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current); const selectedIndex = firstIndex >= 0 ? firstIndex : DROPS.findIndex((item) => item.track === track.name); setPracticeTrack(track.name); setDropIndex(selectedIndex); setCurriculumOpen(false); setAnswer(starterCode(DROPS[selectedIndex]!)); setFeedback(null); setDiagnostic(null); setStarted(false); setResetKey((key) => key + 1); }}><i>{String(trackIndex + 1).padStart(2, '0')}</i><div><strong>{track.name}</strong><small>{track.goal}</small></div><span>{practiceTrack === track.name ? 'LOOP' : `${done}/${items.length}`}</span><ChevronRight /></button>; })}</div></div></div>}
+    {curriculumOpen && <div className="modal-backdrop" onMouseDown={() => setCurriculumOpen(false)}><div className="curriculum-modal" role="dialog" aria-modal="true" aria-labelledby="curriculum-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close curriculum" onClick={() => setCurriculumOpen(false)}><X /></button><div className="curriculum-title"><Brain /><div><span>ADAPTIVE PATH</span><h2 id="curriculum-title">Your curriculum</h2></div><strong>{solved.size}/{DROPS.length}</strong></div><p className="curriculum-copy">New patterns unlock in sequence. Fresh clears return after three other wins, then again after 1, 3, 7, 14, and 30 days.</p><div className="curriculum-mode"><span>{practiceTrack ? `TRACK LOOP · ${practiceTrack}` : 'ADAPTIVE MIX · ALL TRACKS'}</span>{practiceTrack && <button onClick={() => setPracticeTrack(null)}>Return to adaptive mix</button>}</div><div className="track-list">{TRACKS.map((track, trackIndex) => { const items = DROPS.filter((item) => item.track === track.name); const done = items.filter((item) => solved.has(item.id)).length; const firstIndex = DROPS.findIndex((item) => item.track === track.name && !solved.has(item.id)); return <button className={practiceTrack === track.name ? 'active' : ''} key={track.name} onClick={() => { cancelRun(); if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current); const selectedIndex = firstIndex >= 0 ? firstIndex : DROPS.findIndex((item) => item.track === track.name); const selectedDrop = DROPS[selectedIndex]!; setPracticeTrack(track.name); setDropIndex(selectedIndex); setExampleIndex((reviewsRef.current[selectedDrop.id]?.repetitions ?? 0) % selectedDrop.tests.length); setCurriculumOpen(false); setAnswer(starterCode(selectedDrop)); setFeedback(null); setDiagnostic(null); setStarted(false); setResetKey((key) => key + 1); }}><i>{String(trackIndex + 1).padStart(2, '0')}</i><div><strong>{track.name}</strong><small>{track.goal}</small></div><span>{practiceTrack === track.name ? 'LOOP' : `${done}/${items.length}`}</span><ChevronRight /></button>; })}</div></div></div>}
     {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}><div className="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close keyboard help" onClick={() => setHelpOpen(false)}><X /></button><span className="modal-kicker">EDITOR SHORTCUTS · VIM IS THE DEFAULT</span><h2 id="help-title">Hands on keys.<br/>Eyes on the drop.</h2><div className="keys"><kbd>esc</kbd><span>normal mode</span><kbd>i / a</kbd><span>insert / append</span><kbd>h j k l</kbd><span>move</span><kbd>w / b</kbd><span>jump words</span><kbd>0 / $</kbd><span>edges</span><kbd>x / u</kbd><span>delete / undo</span><kbd>⌘ ↵</kbd><span>fire</span><kbd>tab</kbd><span>indent code</span></div><button className="got-it" onClick={() => setHelpOpen(false)}>Got it <ChevronRight /></button></div></div>}
   </main>;
 }
