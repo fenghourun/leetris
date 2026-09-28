@@ -1,4 +1,41 @@
 export const SOLUTIONS: Record<string, string> = {
+  'first-true': `left, right = 0, len(flags)
+while left < right:
+    middle = (left + right) // 2
+    if flags[middle]:
+        right = middle
+    else:
+        left = middle + 1
+return left`,
+  'fibonacci-state': `previous, current = 0, 1
+for _ in range(n):
+    previous, current = current, previous + current
+return previous`,
+  'grid-neighbors': `result = []
+for dr, dc in ((-1,0),(0,-1),(0,1),(1,0)):
+    nr, nc = row + dr, col + dc
+    if 0 <= nr < rows and 0 <= nc < cols:
+        result.append([nr, nc])
+return result`,
+  'build-adjacency': `graph = [[] for _ in range(n)]
+for left, right in edges:
+    graph[left].append(right)
+    graph[right].append(left)
+return [sorted(neighbors) for neighbors in graph]`,
+  'heap-order': `import heapq
+heap = []
+for value in nums:
+    heapq.heappush(heap, value)
+return [heapq.heappop(heap) for _ in range(len(heap))]`,
+  'binary-strings': `result = []
+def search(path):
+    if len(path) == n:
+        result.append(path)
+        return
+    search(path + '0')
+    search(path + '1')
+search('')
+return result`,
   'two-sum': `seen = {}
 for i, value in enumerate(nums):
     need = target - value

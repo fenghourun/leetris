@@ -45,6 +45,16 @@ export function techniqueFor(drop: Drop): { enforced: boolean; pattern?: RegExp;
 }
 
 const REFERENCES: Record<string, [string, string, string]> = {
+  'binary-midpoint': ['(left + right) // 2', 'Floor division returns an integer index between both bounds.', 'left=3, right=10 → 6'],
+  'window-count': ['max(0, n - k + 1)', 'Each valid start owns one complete width-k window.', 'n=5, k=3 → 3 windows'],
+  'initial-window': ['sum(nums[:k])', 'Compute the first state once before rolling the window.', 'sum([2,1,5]) → 8'],
+  'prefix-subtract': ['prefix[right+1] - prefix[left]', 'Subtract cumulative totals at the two range boundaries.', '[left, right] is inclusive'],
+  'prefix-seed': ['prefix = [0]', 'Zero represents the sum before consuming any values.', 'append(prefix[-1] + value)'],
+  'dp-choice': ['max(skip, take)', 'A take-or-skip state keeps the better valid predecessor.', 'current = max(previous, two_back + value)'],
+  'interval-overlap': ['a.start ≤ b.end and b.start ≤ a.end', 'Inclusive intervals overlap unless one lies completely before the other.', '[1,3] overlaps [3,5]'],
+  'sort-intervals': ['sorted(ranges, key=start)', 'Ordering by start makes potential overlaps adjacent.', 'key=lambda interval: interval[0]'],
+  'k-smallest': ['heapq.nsmallest(k, iterable)', 'Returns the k smallest elements using heap selection.', 'nsmallest(2, [7,1,4]) → [1,4]'],
+  'is-leaf': ['node and not left and not right', 'A leaf is a real node with no children.', '[value, None, None]'],
   floor: ['min(iterable)', 'Returns the smallest item.', 'min([8, 3, 5])  # 3'],
   largest: ['max(iterable)', 'Returns the largest item.', 'max([4, 9, 2])  # 9'],
   total: ['sum(iterable, start=0)', 'Adds items from left to right.', 'sum([4, 2, 7])  # 13'],

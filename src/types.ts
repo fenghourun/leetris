@@ -13,6 +13,7 @@ export interface Drop {
   track: string;
   concept: string;
   level: number;
+  chunk?: string;
   color: DropColor;
   label: string;
   seconds: number;

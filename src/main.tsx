@@ -4,10 +4,12 @@ import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { getCM, Vim, vim } from '@replit/codemirror-vim';
-import { EditorView } from '@codemirror/view';
-import { BookOpen, Brain, Check, ChevronDown, ChevronRight, Command, CornerDownLeft, Flame, HelpCircle, Keyboard, Pause, Play, SkipForward, Sparkles, Volume2, VolumeX, X, Zap } from 'lucide-react';
+import { EditorView, ViewUpdate } from '@codemirror/view';
+import { Transaction } from '@codemirror/state';
+import { BookOpen, Brain, Check, ChevronDown, ChevronRight, Command, CornerDownLeft, Flame, HelpCircle, Keyboard, Pause, Play, SkipForward, Sparkles, X, Zap } from 'lucide-react';
 import { CURRICULUM, TRACKS } from './curriculum';
 import { BRIDGE_DRILLS } from './bridgeDrills';
+import { CHUNK_DRILLS } from './chunkDrills';
 import { SOLUTIONS } from './solutions';
 import { referenceFor, techniqueFor } from './pedagogy';
 import { chooseNextIndex, chooseStartingIndex, nextReview } from './scheduler';
@@ -47,12 +49,40 @@ const DROPS: Drop[] = [
     const [concept, insight] = STARTER_META[drop.id]!;
     return { ...drop, track: 'Python Foundations', concept, insight, level: 1 };
   }),
+  ...CHUNK_DRILLS,
   ...CURRICULUM,
   ...BRIDGE_DRILLS,
 ].sort((a, b) => {
   const trackOrder = TRACKS.findIndex((track) => track.name === a.track) - TRACKS.findIndex((track) => track.name === b.track);
   return trackOrder || a.level - b.level;
 });
+
+function starterCode(drop: Drop): string {
+  return drop.mode === 'code'
+    ? `def solve(${drop.signature}):\n    `
+    : `def solve(${drop.signature}):\n    return `;
+}
+
+function pythonLiteral(value: unknown): string {
+  if (value === null) return 'None';
+  if (value === true) return 'True';
+  if (value === false) return 'False';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(pythonLiteral).join(', ')}]`;
+  return String(value);
+}
+
+function exampleFor(drop: Drop, repetitions: number): { input: string; output: string; index: number } {
+  const index = repetitions % drop.tests.length;
+  if (index === 0) return { input: drop.input, output: drop.output, index };
+  const test = drop.tests[index]!;
+  const names = drop.signature.split(',').map((name) => name.trim());
+  return {
+    input: test.args.map((arg, argumentIndex) => `${names[argumentIndex] ?? `arg${argumentIndex + 1}`} = ${pythonLiteral(arg)}`).join(', '),
+    output: pythonLiteral(test.expected),
+    index,
+  };
+}
 
 const initialStack = [
   ['violet', 'violet', null, 'cyan', 'cyan', 'cyan', null, null, 'orange', 'orange'],
@@ -139,7 +169,7 @@ function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, fo
     ...(vimEnabled ? [vim({ status: false })] : []),
     python(),
     EditorView.lineWrapping,
-    EditorView.contentAttributes.of({ 'aria-label': multiline ? 'Python function body' : 'Python expression' }),
+    EditorView.contentAttributes.of({ 'aria-label': 'Python solution editor' }),
   ], [vimEnabled, multiline]);
 
   useEffect(() => { const timer = setTimeout(() => viewRef.current?.focus(), 120); return () => clearTimeout(timer); }, []);
@@ -151,6 +181,7 @@ function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, fo
 
   const createEditor = (view: EditorView) => {
     viewRef.current = view;
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
     if (!vimEnabled) return;
     const cm = getCM(view);
     if (!cm) return;
@@ -168,23 +199,26 @@ function VimInput({ value, setValue, mode, setMode, onRun, onStart, disabled, fo
   };
 
   return <div onKeyDownCapture={handleKeys} className={`input-wrap cm-input ${vimEnabled ? 'vim-editor' : 'standard-editor'} ${mode.toLowerCase()} ${disabled ? 'disabled' : ''} ${multiline ? 'multiline' : ''}`}>
-    {!multiline && <span className="return-token">return</span>}
-    <CodeMirror key={vimEnabled ? 'vim' : 'standard'} aria-label={multiline ? 'Python function body' : 'Python expression'} value={value}
+    <CodeMirror key={vimEnabled ? 'vim' : 'standard'} aria-label="Python solution editor" value={value}
       height="100%" theme={oneDark} extensions={extensions} editable={!disabled} autoFocus
-      basicSetup={{ lineNumbers: multiline, foldGutter: false, highlightActiveLineGutter: false, highlightActiveLine: false, autocompletion: false, bracketMatching: true, closeBrackets: true }}
-      placeholder={multiline ? '# write the function body' : 'your_expression'}
+      basicSetup={{ lineNumbers: true, foldGutter: false, highlightActiveLineGutter: false, highlightActiveLine: false, autocompletion: false, bracketMatching: true, closeBrackets: true }}
+      placeholder="# write your solution"
       onCreateEditor={createEditor}
-      onChange={(nextValue) => { setValue(nextValue); onStart(); }} />
+      onChange={(nextValue, update: ViewUpdate) => {
+        setValue(nextValue);
+        if (update.transactions.some((transaction) => Boolean(transaction.annotation(Transaction.userEvent)))) onStart();
+      }} />
     <span className="mode-chip">{vimEnabled ? mode : 'STANDARD'}</span>
   </div>;
 }
 
 function App() {
+  const [initialDropIndex] = useState(startingDrop);
   const [solved, setSolved] = useState<Set<string>>(loadSolved);
   const [reviews, setReviews] = useState<ReviewMap>(loadReviews);
-  const [dropIndex, setDropIndex] = useState(startingDrop);
+  const [dropIndex, setDropIndex] = useState(initialDropIndex);
   const drop = DROPS[dropIndex];
-  const [answer, setAnswer] = useState('');
+  const [answer, setAnswer] = useState(() => starterCode(DROPS[initialDropIndex]!));
   const [editorStyle, setEditorStyle] = useState<EditorStyle>(loadEditorStyle);
   const [mode, setMode] = useState<VimMode>(() => loadEditorStyle() === 'vim' ? 'INSERT' : 'EDIT');
   const [started, setStarted] = useState(false);
@@ -193,8 +227,8 @@ function App() {
   const [running, setRunning] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [diagnostic, setDiagnostic] = useState<Diagnostic | null>(null);
-  const [score, setScore] = useState(1240);
-  const [combo, setCombo] = useState(3);
+  const [score, setScore] = useState(0);
+  const [combo, setCombo] = useState(0);
   const [hearts, setHearts] = useState(3);
   const [stack, setStack] = useState(initialStack);
   const [resetKey, setResetKey] = useState(0);
@@ -202,8 +236,9 @@ function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
   const [solutionOpen, setSolutionOpen] = useState(false);
-  const [referenceOpen, setReferenceOpen] = useState(true);
-  const [muted, setMuted] = useState(false);
+  const [referenceOpen, setReferenceOpen] = useState(() => window.innerWidth > 820);
+  const [pageHidden, setPageHidden] = useState(document.hidden);
+  const [practiceTrack, setPracticeTrack] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -216,14 +251,34 @@ function App() {
   solvedRef.current = solved;
   const reviewsRef = useRef(reviews);
   reviewsRef.current = reviews;
+  const reinforcementQueueRef = useRef<Array<{ id: string; dueTurn: number }>>([]);
+  const successfulTurnsRef = useRef(0);
 
   useEffect(() => localStorage.setItem(SOLVED_KEY, JSON.stringify([...solved])), [solved]);
   useEffect(() => localStorage.setItem(REVIEW_KEY, JSON.stringify(reviews)), [reviews]);
   useEffect(() => localStorage.setItem(EDITOR_KEY, editorStyle), [editorStyle]);
+  useEffect(() => {
+    const updateVisibility = () => setPageHidden(document.hidden);
+    document.addEventListener('visibilitychange', updateVisibility);
+    return () => document.removeEventListener('visibilitychange', updateVisibility);
+  }, []);
+  useEffect(() => {
+    const closeOverlay = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (solutionOpen) setSolutionOpen(false);
+      else if (curriculumOpen) setCurriculumOpen(false);
+      else if (helpOpen) setHelpOpen(false);
+    };
+    window.addEventListener('keydown', closeOverlay);
+    return () => window.removeEventListener('keydown', closeOverlay);
+  }, [solutionOpen, curriculumOpen, helpOpen]);
 
   const technique = techniqueFor(drop);
-  const techniqueMismatch = Boolean(answer.trim() && technique.enforced && technique.pattern && !technique.pattern.test(answer));
+  const techniqueMismatch = Boolean(answer !== starterCode(drop) && answer.trim() && technique.enforced && technique.pattern && !technique.pattern.test(answer));
   const reference = referenceFor(drop);
+  const repetitions = reviews[drop.id]?.repetitions ?? 0;
+  const mastery = Math.min(repetitions, 5);
+  const example = exampleFor(drop, repetitions);
   const canonicalBody = drop.mode === 'code' ? (SOLUTIONS[drop.id] ?? '# Solution unavailable') : `return ${drop.answer ?? ''}`;
   const canonicalCode = `def solve(${drop.signature}):\n${canonicalBody.split('\n').map((line) => `    ${line}`).join('\n')}`;
 
@@ -238,8 +293,24 @@ function App() {
     activeRunRef.current = null;
     const completed = new Set(solvedRef.current);
     if (newlySolved) completed.add(newlySolved);
-    setDropIndex((index) => chooseNextIndex(DROPS, index, completed, reviewSnapshot || reviewsRef.current));
-    setAnswer(''); setFeedback(null); setDiagnostic(null); setRunning(false); setStarted(false); setPaused(false); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setMisses(0); setResetKey((key) => key + 1);
+    const dueReinforcement = reinforcementQueueRef.current.findIndex((item) => {
+      const candidate = DROPS.find((candidateDrop) => candidateDrop.id === item.id);
+      return item.dueTurn <= successfulTurnsRef.current && item.id !== drop.id && (!practiceTrack || candidate?.track === practiceTrack);
+    });
+    let nextIndex: number;
+    if (dueReinforcement >= 0) {
+      const [item] = reinforcementQueueRef.current.splice(dueReinforcement, 1);
+      nextIndex = DROPS.findIndex((candidate) => candidate.id === item!.id);
+    }
+    else if (practiceTrack) {
+      const trackIndices = DROPS.map((candidate, index) => candidate.track === practiceTrack ? index : -1).filter((index) => index >= 0);
+      const localDrops = trackIndices.map((index) => DROPS[index]!);
+      const localCurrent = Math.max(0, trackIndices.indexOf(dropIndex));
+      nextIndex = trackIndices[chooseNextIndex(localDrops, localCurrent, completed, reviewSnapshot || reviewsRef.current)]!;
+    }
+    else nextIndex = chooseNextIndex(DROPS, dropIndex, completed, reviewSnapshot || reviewsRef.current);
+    setDropIndex(nextIndex);
+    setAnswer(starterCode(DROPS[nextIndex]!)); setFeedback(null); setDiagnostic(null); setRunning(false); setStarted(false); setPaused(false); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setMisses(0); setResetKey((key) => key + 1);
   }
 
   workerMessageRef.current = (data: WorkerMessage) => {
@@ -256,6 +327,7 @@ function App() {
 
     if (data.type === 'result' && data.result.passed === runDrop.tests.length) {
       const bonus = Math.round(timeRef.current * 10);
+      const firstClear = !solvedRef.current.has(runDrop.id);
       const completed = new Set(solvedRef.current).add(runDrop.id);
       const updatedReviews = { ...reviewsRef.current, [runDrop.id]: nextReview(reviewsRef.current[runDrop.id], context.misses + (context.techniqueMatched ? 0 : 1)) };
       solvedRef.current = completed;
@@ -265,6 +337,10 @@ function App() {
       setStack((rows) => rows.length > 1 ? rows.slice(1) : []);
       setSolved(completed);
       setReviews(updatedReviews);
+      successfulTurnsRef.current += 1;
+      if (firstClear && !reinforcementQueueRef.current.some((item) => item.id === runDrop.id)) {
+        reinforcementQueueRef.current.push({ id: runDrop.id, dueTurn: successfulTurnsRef.current + 3 });
+      }
       setDiagnostic({ kind: 'success', title: 'All hidden tests passed', message: runDrop.insight });
       setFeedback({ type: 'clear', title: 'BLOCK CLEARED', detail: context.techniqueMatched ? `${runDrop.insight} · +${runDrop.xp + bonus}` : `Passed · focus-move review scheduled sooner · +${runDrop.xp + bonus}` });
       transitionTimerRef.current = setTimeout(() => advance(runDrop.id, updatedReviews), 1250);
@@ -317,15 +393,15 @@ function App() {
     transitionTimerRef.current = setTimeout(() => advance(), 900);
   }, [started, drop.color, running, createWorker]);
 
-  const time = useGameClock(drop.seconds, started && !feedback, paused, resetKey, expire);
+  const overlaysOpen = helpOpen || curriculumOpen || solutionOpen;
+  const time = useGameClock(drop.seconds, started && !feedback, paused || pageHidden || overlaysOpen, resetKey, expire);
   timeRef.current = time;
 
   const run = () => {
-    if (!answer.trim() || running || feedback?.type === 'clear') return;
+    if (!answer.trim() || answer === starterCode(drop) || running || feedback?.type === 'clear') return;
     if (!runtimeReady) { setFeedback({ type: 'error', title: 'WARMING UP', detail: 'Python will be ready in a moment' }); setTimeout(() => setFeedback(null), 1100); return; }
     setStarted(true); setRunning(true); setFeedback(null); setDiagnostic(null);
-    const body = drop.mode === 'code' ? answer.split('\n').map((line) => `    ${line}`).join('\n') : `    return ${answer}`;
-    const code = `def solve(${drop.signature}):\n${body}`;
+    const code = answer;
     const runId = Date.now();
     activeRunRef.current = { id: runId, drop, misses: missesRef.current, techniqueMatched: !techniqueMismatch };
     workerRef.current?.postMessage({ type: 'run', id: runId, code, tests: drop.tests });
@@ -335,11 +411,14 @@ function App() {
   const resetGame = () => {
     cancelRun();
     if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-    setDropIndex(chooseStartingIndex(DROPS, solvedRef.current, reviewsRef.current)); setAnswer(''); setStarted(false); setPaused(false); setFeedback(null); setDiagnostic(null); setSolutionOpen(false); setScore(0); setCombo(0); setHearts(3); setStack(initialStack); setMisses(0); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setResetKey((key) => key + 1);
+    const nextIndex = chooseStartingIndex(DROPS, solvedRef.current, reviewsRef.current);
+    reinforcementQueueRef.current = []; successfulTurnsRef.current = 0;
+    setPracticeTrack(null); setDropIndex(nextIndex); setAnswer(starterCode(DROPS[nextIndex]!)); setStarted(false); setPaused(false); setFeedback(null); setDiagnostic(null); setSolutionOpen(false); setScore(0); setCombo(0); setHearts(3); setStack(initialStack); setMisses(0); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); setResetKey((key) => key + 1);
   };
 
   const progress = (time / drop.seconds) * 100;
   const danger = time < 6 && started;
+  const stackExample = example.input.length > 32 || example.output.length > 26 || example.input.length + example.output.length > 55;
 
   return <main className={`game ${diagnostic && diagnostic.kind !== 'success' ? 'has-diagnostic' : ''}`}>
     <header className="hud">
@@ -347,7 +426,6 @@ function App() {
       <div className="hud-score"><small>SCORE</small><strong>{score.toLocaleString().padStart(6, '0')}</strong></div>
       <div className="hud-actions">
         <span className={`runtime ${runtimeReady ? 'ready' : ''}`}><i />{runtimeReady ? 'PY READY' : 'LOADING PY'}</span>
-        <button onClick={() => setMuted((value) => !value)} aria-label="Toggle sound">{muted ? <VolumeX /> : <Volume2 />}</button>
         <button onClick={() => setHelpOpen(true)} aria-label="Keyboard help"><HelpCircle /></button>
       </div>
     </header>
@@ -356,9 +434,10 @@ function App() {
       <aside className="left-stats">
         <button className="side-curriculum" onClick={() => setCurriculumOpen(true)}><BookOpen /><span>Curriculum</span><ChevronRight /></button>
         <div className="lesson-card">
-          <div className="lesson-heading"><span>CURRENT LESSON</span><i>LEVEL {drop.level}</i></div>
+          <div className="lesson-heading"><span>{practiceTrack ? 'TRACK LOOP' : 'CURRENT LESSON'}</span><i>{drop.chunk ?? `LEVEL ${drop.level}`}</i></div>
           <small>{drop.track}</small><strong>{drop.concept}</strong>
           <div className="lesson-move"><div><Brain /><span>USE THIS MOVE</span></div><p>{technique.cue}</p></div>
+          <div className="mastery"><span>MASTERY</span><div>{[0,1,2,3,4].map((step) => <i className={step < mastery ? 'filled' : ''} key={step} />)}</div><em>{mastery}/5</em></div>
           <button className="reference-toggle" aria-expanded={referenceOpen} onClick={() => setReferenceOpen((value) => !value)}><span>QUICK REFERENCE</span><ChevronDown className={referenceOpen ? 'open' : ''} /></button>
           {referenceOpen && <div className="reference-body"><code>{reference.signature}</code><p>{reference.note}</p>{reference.example && <pre>{reference.example}</pre>}</div>}
         </div>
@@ -372,27 +451,27 @@ function App() {
         <div className="drop-head"><div className={`drop-kind ${drop.color}`}><Zap fill="currentColor" />CODE DROP{solved.has(drop.id) && <span className="cleared-tag"><Check /> CLEARED</span>}</div><div className={`clock ${danger ? 'danger' : ''}`}><small>{started ? 'DROP IN' : 'READY'}</small><strong>{started ? time.toFixed(1) : drop.seconds.toFixed(1)}</strong></div></div>
         <div className="challenge-core">
           <div className="challenge-copy"><h1>{drop.task}</h1><div className="drop-description">{drop.description}</div></div>
-          <div className="challenge-context"><div className="io-blocks"><div><span>INPUT</span><code>{drop.input}</code></div><ChevronRight /><div className="output-block"><span>TARGET</span><code>{drop.output}</code></div></div></div>
+          <div className="challenge-context"><div className={`io-blocks ${stackExample ? 'stacked' : ''}`}><div><span>EXAMPLE INPUT <em>VARIANT {example.index + 1}/{drop.tests.length}</em></span><code>{example.input}</code></div><ChevronRight aria-hidden="true" /><div className="output-block"><span>EXPECTED OUTPUT</span><code>{example.output}</code></div></div></div>
         </div>
         <div className={`code-dock ${drop.mode === 'code' ? 'multiline' : ''} ${diagnostic && diagnostic.kind !== 'success' ? 'has-error' : ''}`}>
-          <div className="signature"><div className="signature-code"><span>def</span> solve({drop.signature}):</div><div className="editor-toggle" aria-label="Editor mode"><button aria-pressed={editorStyle === 'standard'} className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button aria-pressed={editorStyle === 'vim'} className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
+          <div className="signature"><div className="signature-code"><span className="python-glyph">PY</span> solution.py</div><div className="editor-toggle" aria-label="Editor mode"><button aria-pressed={editorStyle === 'standard'} className={editorStyle === 'standard' ? 'active' : ''} onClick={() => chooseEditor('standard')}>STANDARD</button><button aria-pressed={editorStyle === 'vim'} className={editorStyle === 'vim' ? 'active' : ''} onClick={() => chooseEditor('vim')}>VIM</button></div></div>
           <VimInput key={drop.id} value={answer} setValue={setAnswer} mode={mode} setMode={setMode} onRun={run} onStart={() => setStarted(true)} disabled={running || feedback?.type === 'clear'} focusSignal={`${misses}-${editorStyle}-${solutionOpen}`} multiline={drop.mode === 'code'} vimEnabled={editorStyle === 'vim'} />
           {techniqueMismatch && <div className="technique-warning" role="status"><Brain /><span><strong>Different approach</strong>Your code can still pass. This drill is targeting: {technique.cue}</span></div>}
           {diagnostic && <div className={`diagnostic ${diagnostic.kind || 'error'}`} role="alert"><span>{diagnostic.kind === 'success' ? <Check /> : <X />}</span><div><strong>{diagnostic.title}</strong>{diagnostic.message && <pre>{diagnostic.message}</pre>}{diagnostic.input && <div className="diagnostic-case"><code><b>INPUT</b>{diagnostic.input}</code><code><b>EXPECTED</b>{diagnostic.expected}</code><code><b>RECEIVED</b>{diagnostic.received}</code></div>}</div>{diagnostic.kind !== 'success' && misses > 0 && <button className="diagnostic-solution" onClick={() => setSolutionOpen(true)}>View solution <ChevronRight /></button>}</div>}
-          <div className="dock-foot"><button className="skip" disabled={running || feedback?.type === 'clear'} onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={!answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
+          <div className="dock-foot"><button className="skip" disabled={running || feedback?.type === 'clear'} onClick={() => advance()}><SkipForward /> skip</button><span className={misses >= 2 ? 'hint visible' : 'hint'}>{misses >= 2 ? drop.hint : `${2 - misses} tries until hint`}</span><button className="fire" onClick={run} disabled={answer === starterCode(drop) || !answer.trim() || running || !runtimeReady}>{running ? <span className="spinner" /> : <Play fill="currentColor" />}{running ? 'CHECKING' : 'FIRE'}<kbd className="shortcut-key" aria-label="Command Enter"><Command /><CornerDownLeft /></kbd></button></div>
         </div>
-        {feedback && <div className={`feedback ${feedback.type}`}><span>{feedback.type === 'clear' ? <Check /> : feedback.type === 'coach' ? <Brain /> : <X />}</span><div><strong>{feedback.title}</strong><small>{feedback.detail}</small></div>{feedback.type === 'clear' && <Sparkles className="spark s1" />}{feedback.type === 'clear' && <Sparkles className="spark s2" />}</div>}
+        {feedback && <div className={`feedback ${feedback.type}`} role="status" aria-live="polite"><span>{feedback.type === 'clear' ? <Check /> : feedback.type === 'coach' ? <Brain /> : <X />}</span><div><strong>{feedback.title}</strong><small>{feedback.detail}</small></div>{feedback.type === 'clear' && <Sparkles className="spark s1" />}{feedback.type === 'clear' && <Sparkles className="spark s2" />}</div>}
         <div className="block-stack">{stack.map((row, rowIndex) => <div className="stack-row" key={rowIndex}>{row.map((color, index) => <i key={index} className={color || 'empty'} />)}</div>)}</div>
       </section>
 
       <aside className="next-queue"><span className="aside-label">UP NEXT</span><div className="queue">{[1,2,3].map((offset) => { const next = DROPS[(dropIndex + offset) % DROPS.length]; return <MiniBlock key={offset} drop={next} solved={solved.has(next.id)} ghost={offset > 1} />; })}</div><div className="session-goal"><span>COLLECTION</span><strong>{solved.size}<small> / {DROPS.length}</small></strong><div><i style={{ width: `${(solved.size / DROPS.length) * 100}%` }} /></div></div><button className="pause" onClick={() => setPaused((value) => !value)}>{paused ? <Play /> : <Pause />}{paused ? 'resume' : 'pause'}</button></aside>
     </section>
 
-    <footer className="footer-tip"><span><i /> {drop.mode === 'code' ? 'FUNCTION BODY' : 'ONE EXPRESSION'} · THREE HIDDEN TESTS · {drop.track.toUpperCase()}</span><em>{Object.values(reviews).filter((item) => item.dueAt !== undefined && item.dueAt <= Date.now()).length} reviews due · progress saved locally</em></footer>
-    {paused && <div className="pause-screen" onClick={() => setPaused(false)}><Pause /><strong>FLOW PAUSED</strong><span>click anywhere to drop back in</span></div>}
-    {solutionOpen && <div className="modal-backdrop" onMouseDown={() => setSolutionOpen(false)}><div className="solution-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setSolutionOpen(false)}><X /></button><span className="modal-kicker">CANONICAL MOVE · {drop.concept.toUpperCase()}</span><h2>Study the shape,<br/>then type it yourself.</h2><pre>{canonicalCode}</pre><div className="solution-why"><Brain /><div><strong>Why this works</strong><span>{drop.insight}</span></div></div><div className="solution-actions"><button onClick={() => setSolutionOpen(false)}>Keep trying</button><button onClick={() => { setAnswer(drop.mode === 'code' ? (SOLUTIONS[drop.id] ?? '') : (drop.answer ?? '')); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); }}>Load into editor <ChevronRight /></button></div></div></div>}
-    {curriculumOpen && <div className="modal-backdrop" onMouseDown={() => setCurriculumOpen(false)}><div className="curriculum-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setCurriculumOpen(false)}><X /></button><div className="curriculum-title"><Brain /><div><span>ADAPTIVE PATH</span><h2>Your curriculum</h2></div><strong>{solved.size}/{DROPS.length}</strong></div><p className="curriculum-copy">New patterns unlock in sequence. Cleared drops return after 1, 3, 7, 14, and 30 days to build durable recall.</p><div className="track-list">{TRACKS.map((track, trackIndex) => { const items = DROPS.filter((item) => item.track === track.name); const done = items.filter((item) => solved.has(item.id)).length; const firstIndex = DROPS.findIndex((item) => item.track === track.name && !solved.has(item.id)); return <button key={track.name} onClick={() => { cancelRun(); if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current); setDropIndex(firstIndex >= 0 ? firstIndex : DROPS.findIndex((item) => item.track === track.name)); setCurriculumOpen(false); setAnswer(''); setFeedback(null); setDiagnostic(null); setStarted(false); setResetKey((key) => key + 1); }}><i>{String(trackIndex + 1).padStart(2, '0')}</i><div><strong>{track.name}</strong><small>{track.goal}</small></div><span>{done}/{items.length}</span><ChevronRight /></button>; })}</div></div></div>}
-    {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}><div className="help-modal" onMouseDown={(event) => event.stopPropagation()}><button className="close" onClick={() => setHelpOpen(false)}><X /></button><span className="modal-kicker">VIM MODE IS ALWAYS ON</span><h2>Hands on keys.<br/>Eyes on the drop.</h2><div className="keys"><kbd>esc</kbd><span>normal mode</span><kbd>i / a</kbd><span>insert / append</span><kbd>h j k l</kbd><span>move</span><kbd>w / b</kbd><span>jump words</span><kbd>0 / $</kbd><span>edges</span><kbd>x / u</kbd><span>delete / undo</span><kbd>⌘ ↵</kbd><span>fire</span><kbd>tab</kbd><span>indent code</span></div><button className="got-it" onClick={() => setHelpOpen(false)}>Got it <ChevronRight /></button></div></div>}
+    <footer className="footer-tip"><span><i /> {drop.mode === 'code' ? 'COMPLETE THE FUNCTION' : 'RETURN ONE EXPRESSION'} · THREE HIDDEN TESTS · {drop.track.toUpperCase()}</span><em>{Object.values(reviews).filter((item) => item.dueAt !== undefined && item.dueAt <= Date.now()).length} reviews due · progress saved locally</em></footer>
+    {paused && <button className="pause-screen" onClick={() => setPaused(false)}><Pause /><strong>FLOW PAUSED</strong><span>click anywhere to drop back in</span></button>}
+    {solutionOpen && <div className="modal-backdrop" onMouseDown={() => setSolutionOpen(false)}><div className="solution-modal" role="dialog" aria-modal="true" aria-labelledby="solution-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close solution" onClick={() => setSolutionOpen(false)}><X /></button><span className="modal-kicker">CANONICAL MOVE · {drop.concept.toUpperCase()}</span><h2 id="solution-title">Study the shape,<br/>then type it yourself.</h2><pre>{canonicalCode}</pre><div className="solution-why"><Brain /><div><strong>Why this works</strong><span>{drop.insight}</span></div></div><div className="solution-actions"><button onClick={() => setSolutionOpen(false)}>Keep trying</button><button onClick={() => { setAnswer(canonicalCode); setSolutionOpen(false); setMode(editorStyle === 'vim' ? 'INSERT' : 'EDIT'); }}>Load into editor <ChevronRight /></button></div></div></div>}
+    {curriculumOpen && <div className="modal-backdrop" onMouseDown={() => setCurriculumOpen(false)}><div className="curriculum-modal" role="dialog" aria-modal="true" aria-labelledby="curriculum-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close curriculum" onClick={() => setCurriculumOpen(false)}><X /></button><div className="curriculum-title"><Brain /><div><span>ADAPTIVE PATH</span><h2 id="curriculum-title">Your curriculum</h2></div><strong>{solved.size}/{DROPS.length}</strong></div><p className="curriculum-copy">New patterns unlock in sequence. Fresh clears return after three other wins, then again after 1, 3, 7, 14, and 30 days.</p><div className="curriculum-mode"><span>{practiceTrack ? `TRACK LOOP · ${practiceTrack}` : 'ADAPTIVE MIX · ALL TRACKS'}</span>{practiceTrack && <button onClick={() => setPracticeTrack(null)}>Return to adaptive mix</button>}</div><div className="track-list">{TRACKS.map((track, trackIndex) => { const items = DROPS.filter((item) => item.track === track.name); const done = items.filter((item) => solved.has(item.id)).length; const firstIndex = DROPS.findIndex((item) => item.track === track.name && !solved.has(item.id)); return <button className={practiceTrack === track.name ? 'active' : ''} key={track.name} onClick={() => { cancelRun(); if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current); const selectedIndex = firstIndex >= 0 ? firstIndex : DROPS.findIndex((item) => item.track === track.name); setPracticeTrack(track.name); setDropIndex(selectedIndex); setCurriculumOpen(false); setAnswer(starterCode(DROPS[selectedIndex]!)); setFeedback(null); setDiagnostic(null); setStarted(false); setResetKey((key) => key + 1); }}><i>{String(trackIndex + 1).padStart(2, '0')}</i><div><strong>{track.name}</strong><small>{track.goal}</small></div><span>{practiceTrack === track.name ? 'LOOP' : `${done}/${items.length}`}</span><ChevronRight /></button>; })}</div></div></div>}
+    {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}><div className="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onMouseDown={(event) => event.stopPropagation()}><button className="close" aria-label="Close keyboard help" onClick={() => setHelpOpen(false)}><X /></button><span className="modal-kicker">EDITOR SHORTCUTS · VIM IS THE DEFAULT</span><h2 id="help-title">Hands on keys.<br/>Eyes on the drop.</h2><div className="keys"><kbd>esc</kbd><span>normal mode</span><kbd>i / a</kbd><span>insert / append</span><kbd>h j k l</kbd><span>move</span><kbd>w / b</kbd><span>jump words</span><kbd>0 / $</kbd><span>edges</span><kbd>x / u</kbd><span>delete / undo</span><kbd>⌘ ↵</kbd><span>fire</span><kbd>tab</kbd><span>indent code</span></div><button className="got-it" onClick={() => setHelpOpen(false)}>Got it <ChevronRight /></button></div></div>}
   </main>;
 }
 

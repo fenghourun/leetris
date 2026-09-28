@@ -1,6 +1,6 @@
 # Leetris
 
-Fast, curriculum-driven Python practice with Vim controls, immediate feedback, and spaced repetition.
+Fast Python pattern practice: 89 progressive drills, Vim controls, immediate feedback, track loops, and spaced repetition.
 
 **Play:** https://fenghourun.github.io/leetris/
 
